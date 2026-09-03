@@ -1,0 +1,50 @@
+name: yt_clone
+description: "Youtify - A premium YouTube experience built with Flutter."
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.6
+
+  # Firebase
+  firebase_core: ^2.27.0
+  firebase_auth: ^4.17.0
+  cloud_firestore: ^4.15.0
+  google_sign_in: ^6.2.1
+
+  # Video Player
+  video_player: ^2.8.3
+  chewie: ^1.7.4
+  youtube_player_iframe: ^5.0.0
+
+  # UI & Animations
+  animations: ^2.0.11
+  lottie: ^3.1.0
+  shimmer: ^3.0.0
+  flutter_animate: ^4.5.0
+  fl_chart: ^0.68.0
+
+  # Utilities
+  shared_preferences: ^2.2.2
+  url_launcher: ^6.2.5
+  package_info_plus: ^5.0.1
+  screen_brightness: ^0.2.2+1
+
+  # Networking
+  http: ^1.2.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/
+    - assets/images/
