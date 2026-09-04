@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:youtube_player_iframe/youtube_player_iframe.dart';
+import 'package:video_player/video_player.dart';
+import 'package:chewie/chewie.dart';
+import 'package:youtube_explode_dart/youtube_explode_dart.dart' hide Video;
 import '../models/video.dart';
 import '../widgets/capsule_modal.dart';
 import '../services/youtube_service.dart';
@@ -19,7 +21,9 @@ class VideoPlayerScreen extends StatefulWidget {
 
 class _VideoPlayerScreenState extends State<VideoPlayerScreen>
     with TickerProviderStateMixin {
-  YoutubePlayerController? _ytController;
+  VideoPlayerController? _videoPlayerController;
+  ChewieController? _chewieController;
+  final _yt = YoutubeExplode();
   bool _isLiked = false;
   bool _isDisliked = false;
   bool _isSubscribed = false;
@@ -66,46 +70,43 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
     _initPlayer(widget.video.resolvedYoutubeId);
   }
 
-  void _initPlayer(String? videoId) {
+  void _initPlayer(String? videoId) async {
     if (videoId == null) {
       setState(() => _hasError = true);
       return;
     }
     setState(() => _hasError = false);
 
-    _ytController?.close();
-    _ytController = YoutubePlayerController(
-      params: const YoutubePlayerParams(
-        mute: false,
+    try {
+      final manifest = await _yt.videos.streamsClient.getManifest(videoId);
+      final streamInfo = manifest.muxed.bestQuality;
+      
+      _videoPlayerController = VideoPlayerController.networkUrl(streamInfo.url);
+      await _videoPlayerController!.initialize();
+
+      _chewieController = ChewieController(
+        videoPlayerController: _videoPlayerController!,
+        autoPlay: true,
+        looping: false,
         showControls: true,
-        showFullscreenButton: false, // We'll use our own fullscreen button
-        enableJavaScript: true,
-        loop: false,
-        playsInline: true,
-        showVideoAnnotations: false,
-      ),
-    );
-
-    _ytController!.loadVideoById(videoId: videoId);
-
-    // Listen for errors (152, 150, 100, 101)
-    _ytController!.stream.listen((value) {
-      if (!mounted) return;
-      if (value.hasError) {
-        // Error 152/150 = embedding not allowed → try fallback
-        _onPlayerError();
-      }
-    });
+        allowFullScreen: false,
+        materialProgressColors: ChewieProgressColors(
+          playedColor: Colors.red,
+          handleColor: Colors.red,
+          backgroundColor: Colors.grey,
+          bufferedColor: Colors.white.withOpacity(0.5),
+        ),
+      );
+      
+      if (mounted) setState(() {});
+    } catch (e) {
+      debugPrint('Error initializing player: $e');
+      if (mounted) setState(() => _hasError = true);
+    }
   }
 
   void _onPlayerError() {
-    if (_fallbackIndex < _fallbackIds.length) {
-      // Try a fallback embeddable video
-      final fallbackId = _fallbackIds[_fallbackIndex++];
-      _initPlayer(fallbackId);
-    } else {
-      if (mounted) setState(() => _hasError = true);
-    }
+    if (mounted) setState(() => _hasError = true);
   }
 
   void _toggleFullscreen() {
@@ -147,7 +148,9 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
 
   @override
   void dispose() {
-    _ytController?.close();
+    _videoPlayerController?.dispose();
+    _chewieController?.dispose();
+    _yt.close();
     _likeAnim.dispose();
     _contentAnim.dispose();
     _controlsAnim.dispose();
@@ -287,13 +290,13 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
   }
 
   Widget _buildYouTubePlayer() {
-    if (_ytController == null) {
+    if (_chewieController == null || _videoPlayerController == null || !_videoPlayerController!.value.isInitialized) {
       return Container(
         color: Colors.black,
         child: const Center(child: CircularProgressIndicator(color: Colors.red, strokeWidth: 2)),
       );
     }
-    return YoutubePlayer(controller: _ytController!);
+    return Chewie(controller: _chewieController!);
   }
 
   // ─── Error widget (152-4 and other errors) ───────────────────────────────────

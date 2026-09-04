@@ -8,6 +8,7 @@ import 'search_screen.dart';
 import 'profile_screen.dart';
 import '../utils/page_transitions.dart';
 import '../widgets/donate_bottom_sheet.dart';
+import '../services/youtube_service.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -37,10 +38,11 @@ class _HomeScreenState extends State<HomeScreen>
     {'icon': Icons.person_add, 'title': 'TechGuru subscribed to you', 'time': '1d ago', 'color': Colors.purple},
   ];
 
+  List<Video> _videos = [];
+  bool _isLoading = true;
+
   List<Video> get _filteredVideos {
-    if (_selectedCategoryIndex == 0) return Video.sampleVideos;
-    final cat = _categories[_selectedCategoryIndex];
-    return Video.sampleVideos.where((v) => v.category == cat).toList();
+    return _videos;
   }
 
   @override
@@ -56,6 +58,23 @@ class _HomeScreenState extends State<HomeScreen>
       end: Offset.zero,
     ).animate(CurvedAnimation(parent: _appBarCtrl, curve: Curves.easeOutCubic));
     _loadCategories();
+    _loadVideos();
+  }
+
+  Future<void> _loadVideos() async {
+    setState(() => _isLoading = true);
+    List<Video> videos;
+    if (_selectedCategoryIndex == 0) {
+      videos = await YouTubeService.fetchPopularVideos();
+    } else {
+      videos = await YouTubeService.searchVideos(_categories[_selectedCategoryIndex]);
+    }
+    if (mounted) {
+      setState(() {
+        _videos = videos;
+        _isLoading = false;
+      });
+    }
   }
 
   Future<void> _loadCategories() async {
@@ -413,8 +432,12 @@ class _HomeScreenState extends State<HomeScreen>
                         return Padding(
                           padding: const EdgeInsets.only(right: 8),
                           child: GestureDetector(
-                            onTap: () => setState(
-                                () => _selectedCategoryIndex = index),
+                            onTap: () {
+                              if (_selectedCategoryIndex != index) {
+                                setState(() => _selectedCategoryIndex = index);
+                                _loadVideos();
+                              }
+                            },
                             child: AnimatedContainer(
                               duration: const Duration(milliseconds: 220),
                               curve: Curves.easeOutCubic,
@@ -466,27 +489,33 @@ class _HomeScreenState extends State<HomeScreen>
             ),
           ),
 
-          // Video list with staggered entry animations
           SliverPadding(
             padding: const EdgeInsets.only(bottom: 110),
-            sliver: _filteredVideos.isEmpty
-                ? SliverToBoxAdapter(
-                    child: Padding(
-                      padding: const EdgeInsets.all(60),
-                      child: Column(
-                        children: [
-                          Icon(Icons.video_library_outlined,
-                              color: Colors.grey[600], size: 64),
-                          const SizedBox(height: 16),
-                          Text(
-                            'No videos in this category',
-                            style: TextStyle(
-                                color: Colors.grey[500], fontSize: 15),
-                          ),
-                        ],
-                      ),
+            sliver: _isLoading 
+                ? const SliverFillRemaining(
+                    child: Center(
+                      child: CircularProgressIndicator(color: Colors.red),
                     ),
                   )
+                : _filteredVideos.isEmpty
+                    ? SliverToBoxAdapter(
+                        child: Padding(
+                          padding: const EdgeInsets.all(60),
+                          child: Column(
+                            children: [
+                              Icon(Icons.video_library_outlined,
+                                  color: Colors.grey[600], size: 64),
+                              const SizedBox(height: 16),
+                              Text(
+                                'No videos found',
+                                style: TextStyle(
+                                    color: Colors.grey[500], fontSize: 15),
+                              ),
+                            ],
+                          ),
+                        ),
+                      )
+
                 : SliverList(
                     delegate: SliverChildBuilderDelegate(
                       (context, index) {

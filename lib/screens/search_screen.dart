@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../models/video.dart';
 import '../widgets/video_card.dart';
+import '../services/youtube_service.dart';
 
 class SearchScreen extends StatefulWidget {
   const SearchScreen({super.key});
@@ -13,6 +14,7 @@ class _SearchScreenState extends State<SearchScreen> {
   final TextEditingController _searchController = TextEditingController();
   List<Video> _searchResults = [];
   bool _hasSearched = false;
+  bool _isLoading = false;
 
   final List<String> _trendingSearches = [
     'Flutter 2026 Tutorial',
@@ -22,22 +24,28 @@ class _SearchScreenState extends State<SearchScreen> {
     'Dart 3 Masterclass',
   ];
 
-  void _performSearch(String query) {
+  Future<void> _performSearch(String query) async {
     if (query.trim().isEmpty) {
       setState(() {
         _searchResults = [];
         _hasSearched = false;
+        _isLoading = false;
       });
       return;
     }
     setState(() {
       _hasSearched = true;
-      _searchResults = Video.sampleVideos
-          .where((video) =>
-              video.title.toLowerCase().contains(query.toLowerCase()) ||
-              video.channelName.toLowerCase().contains(query.toLowerCase()))
-          .toList();
+      _isLoading = true;
     });
+    
+    final results = await YouTubeService.searchVideos(query);
+    
+    if (mounted) {
+      setState(() {
+        _searchResults = results;
+        _isLoading = false;
+      });
+    }
   }
 
   @override
@@ -75,19 +83,21 @@ class _SearchScreenState extends State<SearchScreen> {
         ],
       ),
       body: _hasSearched
-          ? _searchResults.isEmpty
-              ? Center(
-                  child: Text(
-                    'No results found for "${_searchController.text}"',
-                    style: TextStyle(color: Colors.grey[400], fontSize: 16),
-                  ),
-                )
-              : ListView.builder(
-                  itemCount: _searchResults.length,
-                  itemBuilder: (context, index) {
-                    return VideoCard(video: _searchResults[index]);
-                  },
-                )
+          ? _isLoading
+              ? const Center(child: CircularProgressIndicator(color: Colors.red))
+              : _searchResults.isEmpty
+                  ? Center(
+                      child: Text(
+                        'No results found for "${_searchController.text}"',
+                        style: TextStyle(color: Colors.grey[400], fontSize: 16),
+                      ),
+                    )
+                  : ListView.builder(
+                      itemCount: _searchResults.length,
+                      itemBuilder: (context, index) {
+                        return VideoCard(video: _searchResults[index]);
+                      },
+                    )
           : ListView(
               padding: const EdgeInsets.all(16),
               children: [

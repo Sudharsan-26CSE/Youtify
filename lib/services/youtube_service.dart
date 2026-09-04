@@ -1,10 +1,10 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import '../models/video.dart';
 
 class YouTubeService {
-  // TODO: Replace with your YouTube Data API v3 key from console.cloud.google.com
-  static const String _apiKey = '';
+  static String get _apiKey => dotenv.env['YOUTUBE_API_KEY'] ?? '';
   static const String _baseUrl = 'https://www.googleapis.com/youtube/v3';
 
   static bool get _hasApiKey => _apiKey.isNotEmpty;
