@@ -10,9 +10,22 @@ import 'screens/home_screen.dart';
 import 'screens/shorts_screen.dart';
 import 'screens/subscriptions_screen.dart';
 import 'screens/message_screen.dart';
+import 'models/video.dart';
+import 'screens/video_player_screen.dart';
+import 'package:audio_session/audio_session.dart';
+import 'package:video_player/video_player.dart';
+import 'services/download_service.dart';
 
 /// Global theme notifier — toggled from SettingsScreen
 final themeNotifier = ValueNotifier<ThemeMode>(ThemeMode.dark);
+
+/// Global currently playing video notifier
+final selectedVideo = ValueNotifier<Video?>(null);
+
+final isPlayerExpanded = ValueNotifier<bool>(false);
+final navigatorKey = GlobalKey<NavigatorState>();
+final globalVideoController = ValueNotifier<VideoPlayerController?>(null);
+
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -28,6 +41,12 @@ void main() async {
       systemNavigationBarIconBrightness: Brightness.light,
     ),
   );
+  
+  // Configure AudioSession for background audio support
+  final session = await AudioSession.instance;
+  await session.configure(const AudioSessionConfiguration.music());
+
+  await DownloadService.init();
   runApp(const YoutifyApp());
 }
 
@@ -40,6 +59,7 @@ class YoutifyApp extends StatelessWidget {
       valueListenable: themeNotifier,
       builder: (context, mode, _) {
         return MaterialApp(
+          navigatorKey: navigatorKey,
           title: 'Youtify',
           debugShowCheckedModeBanner: false,
           themeMode: mode,
@@ -130,11 +150,20 @@ class _MainNavigatorState extends State<MainNavigator>
     MessageScreen(),
   ];
 
+  OverlayEntry? _pipEntry;
+
   @override
   void initState() {
     super.initState();
     _navAnim = AnimationController(
         vsync: this, duration: const Duration(milliseconds: 300));
+        
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_pipEntry == null) {
+        _pipEntry = OverlayEntry(builder: (context) => const GlobalPlayerOverlay());
+        navigatorKey.currentState?.overlay?.insert(_pipEntry!);
+      }
+    });
   }
 
   @override
@@ -145,7 +174,12 @@ class _MainNavigatorState extends State<MainNavigator>
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
+    return PopScope(
+      canPop: false,
+      onPopInvoked: (didPop) {
+        // Prevent back button from closing app — only close from recent tasks
+      },
+      child: Scaffold(
       backgroundColor: const Color(0xFF0F0F0F),
       body: Stack(
         children: [
@@ -216,8 +250,10 @@ class _MainNavigatorState extends State<MainNavigator>
           ),
         ],
       ),
+    ),
     );
   }
+
 
   void _onNavTap(int index) {
     if (_currentIndex == index) return;
@@ -293,6 +329,208 @@ class _NavItem extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class GlobalPlayerOverlay extends StatelessWidget {
+  const GlobalPlayerOverlay({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<Video?>(
+            valueListenable: selectedVideo,
+            builder: (context, video, _) {
+              if (video == null) return const SizedBox.shrink();
+
+              return ValueListenableBuilder<bool>(
+                valueListenable: isPlayerExpanded,
+                builder: (context, expanded, _) {
+                  if (expanded) {
+                    return Positioned.fill(
+                      child: PopScope(
+                        canPop: false,
+                        onPopInvoked: (didPop) {
+                          if (!didPop) isPlayerExpanded.value = false;
+                        },
+                        child: VideoPlayerScreen(video: video),
+                      ),
+                    );
+                  } else {
+                    return _PipWidget(video: video);
+                  }
+                },
+              );
+            },
+          );
+  }
+}
+
+class _PipWidget extends StatelessWidget {
+  final Video video;
+  const _PipWidget({required this.video});
+
+  @override
+  Widget build(BuildContext context) {
+    return Positioned(
+      right: 12,
+      bottom: 100,
+      child: GestureDetector(
+        onTap: () => isPlayerExpanded.value = true,
+        child: Dismissible(
+          key: ValueKey(video.id),
+          direction: DismissDirection.horizontal,
+          onDismissed: (_) => selectedVideo.value = null,
+          child: Material(
+            elevation: 16,
+            borderRadius: BorderRadius.circular(14),
+            color: Colors.transparent,
+            child: Container(
+              width: 220,
+              decoration: BoxDecoration(
+                color: const Color(0xFF1A1A1A),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: Colors.white.withOpacity(0.1), width: 1),
+                boxShadow: [
+                  BoxShadow(color: Colors.black.withOpacity(0.6), blurRadius: 20, offset: const Offset(0, 6)),
+                ],
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Thumbnail
+                  Stack(
+                    children: [
+                      ClipRRect(
+                        borderRadius: const BorderRadius.vertical(top: Radius.circular(14)),
+                        child: Image.network(
+                          video.thumbnailUrl,
+                          width: 220,
+                          height: 124,
+                          fit: BoxFit.cover,
+                          errorBuilder: (_, __, ___) => Container(width: 220, height: 124, color: Colors.grey[900]),
+                        ),
+                      ),
+                      Positioned.fill(
+                        child: Container(
+                          decoration: BoxDecoration(
+                            color: Colors.black.withOpacity(0.25),
+                            borderRadius: const BorderRadius.vertical(top: Radius.circular(14)),
+                          ),
+                        ),
+                      ),
+                      // Close button
+                      Positioned(
+                        top: 6, right: 6,
+                        child: GestureDetector(
+                          onTap: () => selectedVideo.value = null,
+                          child: Container(
+                            padding: const EdgeInsets.all(4),
+                            decoration: BoxDecoration(color: Colors.black.withOpacity(0.6), shape: BoxShape.circle),
+                            child: const Icon(Icons.close, color: Colors.white, size: 14),
+                          ),
+                        ),
+                      ),
+                      // Expand icon
+                      Positioned(
+                        top: 6, left: 6,
+                        child: Container(
+                          padding: const EdgeInsets.all(4),
+                          decoration: BoxDecoration(color: Colors.black.withOpacity(0.6), shape: BoxShape.circle),
+                          child: const Icon(Icons.fullscreen, color: Colors.white, size: 14),
+                        ),
+                      ),
+                    ],
+                  ),
+                  // Controls row
+                  ValueListenableBuilder<VideoPlayerController?>(
+                    valueListenable: globalVideoController,
+                    builder: (context, ctrl, _) {
+                      final isPlaying = ctrl?.value.isPlaying ?? false;
+                      return Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                          children: [
+                            _PipBtn(
+                              icon: Icons.replay_10,
+                              size: 20,
+                              onTap: () {
+                                final pos = ctrl?.value.position ?? Duration.zero;
+                                ctrl?.seekTo(pos - const Duration(seconds: 10));
+                              },
+                            ),
+                            _PipBtn(
+                              icon: isPlaying ? Icons.pause : Icons.play_arrow,
+                              size: 26,
+                              onTap: () {
+                                if (ctrl != null) {
+                                  isPlaying ? ctrl.pause() : ctrl.play();
+                                }
+                              },
+                            ),
+                            _PipBtn(
+                              icon: Icons.forward_10,
+                              size: 20,
+                              onTap: () {
+                                final pos = ctrl?.value.position ?? Duration.zero;
+                                ctrl?.seekTo(pos + const Duration(seconds: 10));
+                              },
+                            ),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
+                  // Mini progress bar
+                  ValueListenableBuilder<VideoPlayerController?>(
+                    valueListenable: globalVideoController,
+                    builder: (context, ctrl, _) {
+                      if (ctrl == null || !ctrl.value.isInitialized) {
+                        return const SizedBox.shrink();
+                      }
+                      final total = ctrl.value.duration.inMilliseconds;
+                      final current = ctrl.value.position.inMilliseconds;
+                      final progress = total > 0 ? current / total : 0.0;
+                      return ClipRRect(
+                        borderRadius: const BorderRadius.vertical(bottom: Radius.circular(14)),
+                        child: LinearProgressIndicator(
+                          value: progress,
+                          backgroundColor: Colors.grey[800],
+                          valueColor: const AlwaysStoppedAnimation<Color>(Colors.red),
+                          minHeight: 3,
+                        ),
+                      );
+                    },
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _PipBtn extends StatelessWidget {
+  final IconData icon;
+  final double size;
+  final VoidCallback onTap;
+  const _PipBtn({required this.icon, required this.size, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.all(6),
+        decoration: BoxDecoration(
+          color: Colors.white.withOpacity(0.08),
+          shape: BoxShape.circle,
+        ),
+        child: Icon(icon, color: Colors.white, size: size),
       ),
     );
   }

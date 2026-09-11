@@ -5,6 +5,7 @@ import '../widgets/video_card.dart';
 import '../widgets/capsule_modal.dart';
 import '../utils/page_transitions.dart';
 import 'video_player_screen.dart';
+import '../services/youtube_service.dart';
 
 /// Full in-app channel profile screen.
 /// Displayed when user taps a subscribed channel.
@@ -27,32 +28,85 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen>
   bool _isSubscribed = true;
   bool _isNotified = true;
 
-  // Channel videos (filter sample videos by category or use all)
-  List<Video> get _channelVideos => Video.sampleVideos;
+  List<Video> _channelVideos = [];
   List<Video> get _channelShorts => Video.getShortsVideos();
+  String? _nextPageToken;
+  bool _isLoadingVideos = true;
+  bool _isLoadingMore = false;
+  final _videosController = ScrollController();
 
   String get _name => widget.channel['name'] as String? ?? 'Channel';
-  String get _avatar => widget.channel['avatar'] as String? ??
+  String get _avatar =>
+      widget.channel['avatar'] as String? ??
       'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?q=80&w=200';
   String get _subs => widget.channel['subs'] as String? ?? '0';
   String get _watchTime => widget.channel['watchTime'] as String? ?? '0m';
-  String get _banner => widget.channel['banner'] as String? ??
+  String get _banner =>
+      widget.channel['banner'] as String? ??
       'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?q=80&w=1200&auto=format&fit=crop';
+  String get _channelId => widget.channel['id'] as String? ?? '';
+  String get _description => widget.channel['description'] as String? ?? '';
+  String get _videoCount => widget.channel['videoCount'] as String? ?? '0';
+  String get _viewCount => widget.channel['viewCount'] as String? ?? '0';
 
   @override
   void initState() {
     super.initState();
-    _entryCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 600))..forward();
+    _entryCtrl = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 600))
+      ..forward();
     _fade = CurvedAnimation(parent: _entryCtrl, curve: Curves.easeOut);
     _slide = Tween<Offset>(begin: const Offset(0, 0.05), end: Offset.zero)
-        .animate(CurvedAnimation(parent: _entryCtrl, curve: Curves.easeOutCubic));
+        .animate(
+            CurvedAnimation(parent: _entryCtrl, curve: Curves.easeOutCubic));
     _tabCtrl = TabController(length: 3, vsync: this);
+    _videosController.addListener(_onVideosScroll);
+    _loadChannelVideos();
+  }
+
+  void _onVideosScroll() {
+    if (_videosController.position.pixels >=
+        _videosController.position.maxScrollExtent - 200) {
+      _loadMoreChannelVideos();
+    }
+  }
+
+  Future<void> _loadChannelVideos() async {
+    if (_channelId.isEmpty) {
+      if (mounted)
+        setState(() {
+          _channelVideos = Video.sampleVideos;
+          _isLoadingVideos = false;
+        });
+      return;
+    }
+    final page = await YouTubeService.fetchChannelVideos(_channelId);
+    if (mounted)
+      setState(() {
+        _channelVideos = page.videos;
+        _nextPageToken = page.nextPageToken;
+        _isLoadingVideos = false;
+      });
+  }
+
+  Future<void> _loadMoreChannelVideos() async {
+    if (_isLoadingMore || _nextPageToken == null) return;
+    setState(() => _isLoadingMore = true);
+    final page = await YouTubeService.fetchChannelVideos(_channelId,
+        pageToken: _nextPageToken);
+    if (mounted)
+      setState(() {
+        _channelVideos.addAll(page.videos);
+        _nextPageToken = page.nextPageToken;
+        _isLoadingMore = false;
+      });
   }
 
   @override
   void dispose() {
     _entryCtrl.dispose();
     _tabCtrl.dispose();
+    _videosController.dispose();
     super.dispose();
   }
 
@@ -68,45 +122,67 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen>
               padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
               child: Row(children: [
                 CircleAvatar(
-                  radius: 20, 
+                  radius: 20,
                   backgroundImage: NetworkImage(_avatar),
                   onBackgroundImageError: (e, s) => {},
                 ),
                 const SizedBox(width: 12),
-                Text(_name, style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+                Text(_name,
+                    style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold)),
               ]),
             ),
             const Divider(color: Color(0xFF272727), height: 1),
             CapsuleAction(
-              icon: _isSubscribed ? Icons.person_remove_outlined : Icons.person_add_outlined,
+              icon: _isSubscribed
+                  ? Icons.person_remove_outlined
+                  : Icons.person_add_outlined,
               label: _isSubscribed ? 'Unsubscribe' : 'Subscribe',
               color: _isSubscribed ? Colors.red : Colors.green,
               onTap: () {
                 setState(() => _isSubscribed = !_isSubscribed);
                 ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                  content: Text(_isSubscribed ? 'Subscribed to $_name' : 'Unsubscribed from $_name'),
+                  content: Text(_isSubscribed
+                      ? 'Subscribed to $_name'
+                      : 'Unsubscribed from $_name'),
                   backgroundColor: const Color(0xFF1A1A1A),
                   behavior: SnackBarBehavior.floating,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12)),
                 ));
               },
             ),
             CapsuleAction(
-              icon: _isNotified ? Icons.notifications_active : Icons.notifications_none,
-              label: _isNotified ? 'Turn off notifications' : 'Turn on notifications',
+              icon: _isNotified
+                  ? Icons.notifications_active
+                  : Icons.notifications_none,
+              label: _isNotified
+                  ? 'Turn off notifications'
+                  : 'Turn on notifications',
               onTap: () => setState(() => _isNotified = !_isNotified),
             ),
-            CapsuleAction(icon: Icons.message_outlined, label: 'Message', onTap: () {}),
-            CapsuleAction(icon: Icons.share_outlined, label: 'Share Channel', onTap: () {
-              showCapsuleModal(
-                context: context,
-                child: ShareCapsule(
-                  shareUrl: 'https://youtube.com/@${_name.toLowerCase().replaceAll(' ', '_')}',
-                  title: _name,
-                ),
-              );
-            }),
-            CapsuleAction(icon: Icons.flag_outlined, label: 'Report', color: Colors.orange, onTap: () {}),
+            CapsuleAction(
+                icon: Icons.message_outlined, label: 'Message', onTap: () {}),
+            CapsuleAction(
+                icon: Icons.share_outlined,
+                label: 'Share Channel',
+                onTap: () {
+                  showCapsuleModal(
+                    context: context,
+                    child: ShareCapsule(
+                      shareUrl:
+                          'https://youtube.com/@${_name.toLowerCase().replaceAll(' ', '_')}',
+                      title: _name,
+                    ),
+                  );
+                }),
+            CapsuleAction(
+                icon: Icons.flag_outlined,
+                label: 'Report',
+                color: Colors.orange,
+                onTap: () {}),
           ],
         ),
       ),
@@ -146,7 +222,8 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen>
                   indicatorWeight: 2,
                   labelColor: Colors.white,
                   unselectedLabelColor: Colors.grey,
-                  labelStyle: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                  labelStyle: const TextStyle(
+                      fontWeight: FontWeight.bold, fontSize: 13),
                   tabs: const [
                     Tab(text: 'Videos'),
                     Tab(text: 'Shorts'),
@@ -199,7 +276,10 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen>
         ),
         // Blur at bottom
         Positioned(
-          bottom: 0, left: 0, right: 0, height: 80,
+          bottom: 0,
+          left: 0,
+          right: 0,
+          height: 80,
           child: ClipRect(
             child: BackdropFilter(
               filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
@@ -222,10 +302,14 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen>
                       decoration: BoxDecoration(
                         shape: BoxShape.circle,
                         border: Border.all(color: Colors.white, width: 2),
-                        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.3), blurRadius: 12)],
+                        boxShadow: [
+                          BoxShadow(
+                              color: Colors.black.withOpacity(0.3),
+                              blurRadius: 12)
+                        ],
                       ),
                       child: CircleAvatar(
-                        radius: 36, 
+                        radius: 36,
                         backgroundImage: NetworkImage(_avatar),
                         onBackgroundImageError: (e, s) => {},
                       ),
@@ -238,19 +322,31 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen>
                         children: [
                           Row(
                             children: [
-                              Text(_name, style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
+                              Text(_name,
+                                  style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 20,
+                                      fontWeight: FontWeight.bold)),
                               const SizedBox(width: 6),
-                              const Icon(Icons.verified, color: Colors.blue, size: 16),
+                              const Icon(Icons.verified,
+                                  color: Colors.blue, size: 16),
                             ],
                           ),
                           const SizedBox(height: 2),
                           Text('@${_name.toLowerCase().replaceAll(' ', '_')}',
-                              style: TextStyle(color: Colors.grey[400], fontSize: 13)),
+                              style: TextStyle(
+                                  color: Colors.grey[400], fontSize: 13)),
                           const SizedBox(height: 4),
                           Row(children: [
-                            Text('$_subs subs', style: TextStyle(color: Colors.grey[300], fontSize: 12)),
-                            Text(' • ', style: TextStyle(color: Colors.grey[600], fontSize: 12)),
-                            Text('You watched $_watchTime', style: TextStyle(color: Colors.grey[300], fontSize: 12)),
+                            Text('$_subs subs',
+                                style: TextStyle(
+                                    color: Colors.grey[300], fontSize: 12)),
+                            Text(' • ',
+                                style: TextStyle(
+                                    color: Colors.grey[600], fontSize: 12)),
+                            Text('You watched $_watchTime',
+                                style: TextStyle(
+                                    color: Colors.grey[300], fontSize: 12)),
                           ]),
                         ],
                       ),
@@ -270,20 +366,32 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen>
                           duration: const Duration(milliseconds: 250),
                           height: 40,
                           decoration: BoxDecoration(
-                            color: _isSubscribed ? const Color(0xFF2A2A2A) : Colors.red,
+                            color: _isSubscribed
+                                ? const Color(0xFF2A2A2A)
+                                : Colors.red,
                             borderRadius: BorderRadius.circular(20),
-                            border: Border.all(color: _isSubscribed ? Colors.white.withOpacity(0.2) : Colors.transparent),
+                            border: Border.all(
+                                color: _isSubscribed
+                                    ? Colors.white.withOpacity(0.2)
+                                    : Colors.transparent),
                           ),
                           child: Center(
                             child: Row(
                               mainAxisSize: MainAxisSize.min,
                               children: [
-                                Icon(_isSubscribed ? Icons.notifications_active : Icons.subscriptions,
-                                    color: Colors.white, size: 16),
+                                Icon(
+                                    _isSubscribed
+                                        ? Icons.notifications_active
+                                        : Icons.subscriptions,
+                                    color: Colors.white,
+                                    size: 16),
                                 const SizedBox(width: 6),
                                 Text(
                                   _isSubscribed ? 'Subscribed' : 'Subscribe',
-                                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+                                  style: const TextStyle(
+                                      color: Colors.white,
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 13),
                                 ),
                               ],
                             ),
@@ -296,16 +404,23 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen>
                       onTap: () => setState(() => _isNotified = !_isNotified),
                       child: AnimatedContainer(
                         duration: const Duration(milliseconds: 250),
-                        width: 40, height: 40,
+                        width: 40,
+                        height: 40,
                         decoration: BoxDecoration(
-                          color: _isNotified ? Colors.red.withOpacity(0.15) : const Color(0xFF2A2A2A),
+                          color: _isNotified
+                              ? Colors.red.withOpacity(0.15)
+                              : const Color(0xFF2A2A2A),
                           shape: BoxShape.circle,
                           border: Border.all(
-                            color: _isNotified ? Colors.red.withOpacity(0.5) : Colors.white.withOpacity(0.2),
+                            color: _isNotified
+                                ? Colors.red.withOpacity(0.5)
+                                : Colors.white.withOpacity(0.2),
                           ),
                         ),
                         child: Icon(
-                          _isNotified ? Icons.notifications_active : Icons.notifications_none,
+                          _isNotified
+                              ? Icons.notifications_active
+                              : Icons.notifications_none,
                           color: _isNotified ? Colors.red : Colors.white,
                           size: 18,
                         ),
@@ -317,19 +432,23 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen>
                         showCapsuleModal(
                           context: context,
                           child: ShareCapsule(
-                            shareUrl: 'https://youtube.com/@${_name.toLowerCase().replaceAll(' ', '_')}',
+                            shareUrl:
+                                'https://youtube.com/@${_name.toLowerCase().replaceAll(' ', '_')}',
                             title: _name,
                           ),
                         );
                       },
                       child: Container(
-                        width: 40, height: 40,
+                        width: 40,
+                        height: 40,
                         decoration: BoxDecoration(
                           color: const Color(0xFF2A2A2A),
                           shape: BoxShape.circle,
-                          border: Border.all(color: Colors.white.withOpacity(0.2)),
+                          border:
+                              Border.all(color: Colors.white.withOpacity(0.2)),
                         ),
-                        child: const Icon(Icons.share_outlined, color: Colors.white, size: 18),
+                        child: const Icon(Icons.share_outlined,
+                            color: Colors.white, size: 18),
                       ),
                     ),
                   ],
@@ -343,12 +462,23 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen>
   }
 
   Widget _buildVideosTab() {
+    if (_isLoadingVideos) {
+      return const Center(child: CircularProgressIndicator(color: Colors.red));
+    }
     return ListView.builder(
+      controller: _videosController,
       padding: const EdgeInsets.only(top: 8, bottom: 120),
-      itemCount: _channelVideos.length,
+      itemCount: _channelVideos.length + (_isLoadingMore ? 1 : 0),
       itemBuilder: (ctx, i) {
+        if (i == _channelVideos.length) {
+          return const Padding(
+              padding: EdgeInsets.all(20),
+              child:
+                  Center(child: CircularProgressIndicator(color: Colors.red)));
+        }
         final v = _channelVideos[i];
-        return _ChannelVideoTile(video: v, channelName: _name, channelAvatar: _avatar);
+        return _ChannelVideoTile(
+            video: v, channelName: _name, channelAvatar: _avatar);
       },
     );
   }
@@ -375,26 +505,42 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen>
             child: Stack(
               fit: StackFit.expand,
               children: [
-                Image.network(v.thumbnailUrl, fit: BoxFit.cover,
-                    errorBuilder: (_, __, ___) => Container(color: Colors.grey[900])),
+                Image.network(v.thumbnailUrl,
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, __, ___) =>
+                        Container(color: Colors.grey[900])),
                 Container(
                   decoration: BoxDecoration(
                     gradient: LinearGradient(
-                      colors: [Colors.transparent, Colors.black.withOpacity(0.7)],
+                      colors: [
+                        Colors.transparent,
+                        Colors.black.withOpacity(0.7)
+                      ],
                       begin: Alignment.topCenter,
                       end: Alignment.bottomCenter,
                     ),
                   ),
                 ),
-                const Positioned(top: 6, left: 6, child: Icon(Icons.bolt, color: Colors.white, size: 14)),
+                const Positioned(
+                    top: 6,
+                    left: 6,
+                    child: Icon(Icons.bolt, color: Colors.white, size: 14)),
                 Positioned(
-                  bottom: 6, left: 4, right: 4,
-                  child: Text(v.title, maxLines: 2,
-                      style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.w500)),
+                  bottom: 6,
+                  left: 4,
+                  right: 4,
+                  child: Text(v.title,
+                      maxLines: 2,
+                      style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 10,
+                          fontWeight: FontWeight.w500)),
                 ),
                 Positioned(
-                  bottom: 36, left: 4,
-                  child: Text(v.views, style: TextStyle(color: Colors.grey[300], fontSize: 9)),
+                  bottom: 36,
+                  left: 4,
+                  child: Text(v.views,
+                      style: TextStyle(color: Colors.grey[300], fontSize: 9)),
                 ),
               ],
             ),
@@ -407,7 +553,9 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen>
   Widget _buildShortsViewer(int startIndex) {
     return Scaffold(
       backgroundColor: Colors.black,
-      body: Center(child: Text('Shorts player', style: const TextStyle(color: Colors.white))),
+      body: Center(
+          child: Text('Shorts player',
+              style: const TextStyle(color: Colors.white))),
     );
   }
 
@@ -417,22 +565,42 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen>
       children: [
         _AboutSection(
           title: 'Description',
-          content: 'Welcome to $_name! We create premium content about coding, technology, and design. Subscribe for weekly videos on Flutter, Dart, and mobile development.',
+          content: _description.isEmpty
+              ? 'No channel description available.'
+              : _description,
         ),
         const SizedBox(height: 16),
-        _AboutSection(title: 'Stats', content: '• $_subs subscribers\n• 42 videos\n• Joined Jan 2022\n• 8.9M total views'),
+        _AboutSection(
+            title: 'Stats',
+            content:
+                '• $_subs subscribers\n• $_videoCount videos\n• $_viewCount total views'),
         const SizedBox(height: 16),
         Container(
           padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(color: const Color(0xFF1A1A1A), borderRadius: BorderRadius.circular(14)),
+          decoration: BoxDecoration(
+              color: const Color(0xFF1A1A1A),
+              borderRadius: BorderRadius.circular(14)),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text('Links', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15)),
+              const Text('Links',
+                  style: TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 15)),
               const SizedBox(height: 12),
-              _LinkItem(icon: Icons.link, label: 'youtube.com/@${_name.toLowerCase().replaceAll(' ', '_')}'),
-              _LinkItem(icon: Icons.camera_alt_outlined, label: 'instagram.com/${_name.toLowerCase().replaceAll(' ', '')}'),
-              _LinkItem(icon: Icons.message_outlined, label: 'twitter.com/${_name.toLowerCase().replaceAll(' ', '')}'),
+              _LinkItem(
+                  icon: Icons.link,
+                  label:
+                      'youtube.com/@${_name.toLowerCase().replaceAll(' ', '_')}'),
+              _LinkItem(
+                  icon: Icons.camera_alt_outlined,
+                  label:
+                      'instagram.com/${_name.toLowerCase().replaceAll(' ', '')}'),
+              _LinkItem(
+                  icon: Icons.message_outlined,
+                  label:
+                      'twitter.com/${_name.toLowerCase().replaceAll(' ', '')}'),
             ],
           ),
         ),
@@ -449,7 +617,10 @@ class _ChannelVideoTile extends StatelessWidget {
   final String channelName;
   final String channelAvatar;
 
-  const _ChannelVideoTile({required this.video, required this.channelName, required this.channelAvatar});
+  const _ChannelVideoTile(
+      {required this.video,
+      required this.channelName,
+      required this.channelAvatar});
 
   @override
   Widget build(BuildContext context) {
@@ -460,21 +631,36 @@ class _ChannelVideoTile extends StatelessWidget {
       ),
       child: Container(
         margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-        decoration: BoxDecoration(color: const Color(0xFF1A1A1A), borderRadius: BorderRadius.circular(12)),
+        decoration: BoxDecoration(
+            color: const Color(0xFF1A1A1A),
+            borderRadius: BorderRadius.circular(12)),
         child: Row(
           children: [
             ClipRRect(
-              borderRadius: const BorderRadius.horizontal(left: Radius.circular(12)),
+              borderRadius:
+                  const BorderRadius.horizontal(left: Radius.circular(12)),
               child: Stack(
                 children: [
-                  Image.network(video.thumbnailUrl, width: 140, height: 85, fit: BoxFit.cover,
-                      errorBuilder: (_, __, ___) => Container(width: 140, height: 85, color: Colors.grey[900])),
+                  Image.network(video.thumbnailUrl,
+                      width: 140,
+                      height: 85,
+                      fit: BoxFit.cover,
+                      errorBuilder: (_, __, ___) => Container(
+                          width: 140, height: 85, color: Colors.grey[900])),
                   Positioned(
-                    bottom: 4, right: 4,
+                    bottom: 4,
+                    right: 4,
                     child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
-                      decoration: BoxDecoration(color: Colors.black.withOpacity(0.8), borderRadius: BorderRadius.circular(3)),
-                      child: Text(video.duration, style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 4, vertical: 1),
+                      decoration: BoxDecoration(
+                          color: Colors.black.withOpacity(0.8),
+                          borderRadius: BorderRadius.circular(3)),
+                      child: Text(video.duration,
+                          style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold)),
                     ),
                   ),
                 ],
@@ -486,11 +672,18 @@ class _ChannelVideoTile extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(video.title, maxLines: 2, overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w500, height: 1.3)),
+                    Text(video.title,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w500,
+                            height: 1.3)),
                     const SizedBox(height: 4),
                     Text('${video.views} • ${video.timestamp}',
-                        style: TextStyle(color: Colors.grey[500], fontSize: 11)),
+                        style:
+                            TextStyle(color: Colors.grey[500], fontSize: 11)),
                   ],
                 ),
               ),
@@ -508,17 +701,25 @@ class _AboutSection extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.all(16),
-    decoration: BoxDecoration(color: const Color(0xFF1A1A1A), borderRadius: BorderRadius.circular(14)),
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(title, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15)),
-        const SizedBox(height: 8),
-        Text(content, style: TextStyle(color: Colors.grey[300], fontSize: 13, height: 1.6)),
-      ],
-    ),
-  );
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+            color: const Color(0xFF1A1A1A),
+            borderRadius: BorderRadius.circular(14)),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(title,
+                style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 15)),
+            const SizedBox(height: 8),
+            Text(content,
+                style: TextStyle(
+                    color: Colors.grey[300], fontSize: 13, height: 1.6)),
+          ],
+        ),
+      );
 }
 
 class _LinkItem extends StatelessWidget {
@@ -528,13 +729,13 @@ class _LinkItem extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.symmetric(vertical: 6),
-    child: Row(children: [
-      Icon(icon, color: Colors.blue[300], size: 16),
-      const SizedBox(width: 10),
-      Text(label, style: TextStyle(color: Colors.blue[300], fontSize: 13)),
-    ]),
-  );
+        padding: const EdgeInsets.symmetric(vertical: 6),
+        child: Row(children: [
+          Icon(icon, color: Colors.blue[300], size: 16),
+          const SizedBox(width: 10),
+          Text(label, style: TextStyle(color: Colors.blue[300], fontSize: 13)),
+        ]),
+      );
 }
 
 // Wrapper to avoid direct reference issues in channel tile

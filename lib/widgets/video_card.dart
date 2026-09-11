@@ -5,6 +5,7 @@ import '../screens/downloads_screen.dart';
 import '../services/youtube_service.dart';
 import '../services/download_service.dart';
 import '../utils/page_transitions.dart';
+import '../main.dart';
 import 'capsule_modal.dart';
 
 class VideoCard extends StatefulWidget {
@@ -57,10 +58,8 @@ class _VideoCardState extends State<VideoCard>
   }
 
   void _openVideo() {
-    Navigator.push(
-      context,
-      SlideRightPageRoute(page: VideoPlayerScreen(video: widget.video)),
-    );
+    selectedVideo.value = widget.video;
+    isPlayerExpanded.value = true;
   }
 
   @override

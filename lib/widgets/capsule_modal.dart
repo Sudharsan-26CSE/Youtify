@@ -1,5 +1,6 @@
 import 'dart:ui';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 /// A reusable capsule-style modal bottom sheet with blur background.
 /// Use [showCapsuleModal] to display it.
@@ -192,6 +193,7 @@ class ShareCapsule extends StatelessWidget {
             mainAxisAlignment: MainAxisAlignment.spaceAround,
             children: [
               _ShareBtn(icon: Icons.copy, label: 'Copy Link', onTap: () {
+                Clipboard.setData(ClipboardData(text: shareUrl));
                 ScaffoldMessenger.of(context).showSnackBar(
                   SnackBar(
                     content: const Text('Link copied! 🔗'),

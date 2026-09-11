@@ -1,6 +1,8 @@
+import 'dart:math';
 import 'package:flutter/material.dart';
 import '../services/download_service.dart';
-import '../models/video.dart';
+import '../services/youtube_service.dart';
+import '../widgets/capsule_modal.dart';
 
 class DownloadsScreen extends StatefulWidget {
   const DownloadsScreen({super.key});
@@ -14,6 +16,7 @@ class _DownloadsScreenState extends State<DownloadsScreen>
   late AnimationController _entryCtrl;
   late Animation<double> _fade;
   late Animation<Offset> _slide;
+  final Set<String> _selectedIds = {};
 
   @override
   void initState() {
@@ -29,7 +32,62 @@ class _DownloadsScreenState extends State<DownloadsScreen>
   }
 
   void _onUpdate() {
-    if (mounted) setState(() {});
+    if (mounted) {
+      setState(() {
+        _selectedIds.removeWhere(
+            (id) => !DownloadService.downloads.any((d) => d.video.id == id));
+      });
+    }
+  }
+
+  void _toggleSelection(String id) {
+    setState(() {
+      if (!_selectedIds.add(id)) _selectedIds.remove(id);
+    });
+  }
+
+  Future<void> _deleteSelected() async {
+    if (_selectedIds.isEmpty) return;
+    final confirmed = await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            backgroundColor: const Color(0xFF1A1A1A),
+            title: const Text('Delete downloads?',
+                style: TextStyle(color: Colors.white)),
+            content: Text(
+                'This will permanently remove the selected local files.',
+                style: TextStyle(color: Colors.grey[400])),
+            actions: [
+              TextButton(
+                  onPressed: () => Navigator.pop(context, false),
+                  child: const Text('Cancel')),
+              FilledButton(
+                style: FilledButton.styleFrom(backgroundColor: Colors.red),
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text('Delete'),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+    if (!confirmed) return;
+    for (final id in _selectedIds.toList()) {
+      await DownloadService.removeDownload(id);
+    }
+    if (mounted) setState(() => _selectedIds.clear());
+  }
+
+  void _shareSelected() {
+    if (_selectedIds.length != 1) return;
+    final item = DownloadService.downloads
+        .firstWhere((download) => download.video.id == _selectedIds.first);
+    showCapsuleModal(
+      context: context,
+      child: ShareCapsule(
+        shareUrl: YouTubeService.shareUrl(item.video.id),
+        title: item.video.title,
+      ),
+    );
   }
 
   @override
@@ -58,32 +116,101 @@ class _DownloadsScreenState extends State<DownloadsScreen>
             IconButton(
               icon: const Icon(Icons.delete_sweep_outlined, color: Colors.grey),
               onPressed: () async {
-                for (final d in downloads.toList()) {
-                  await DownloadService.removeDownload(d.video.id);
-                }
+                setState(() => _selectedIds
+                  ..clear()
+                  ..addAll(downloads.map((d) => d.video.id)));
+                await _deleteSelected();
               },
             ),
         ],
       ),
-      body: FadeTransition(
-        opacity: _fade,
-        child: SlideTransition(
-          position: _slide,
-          child: downloads.isEmpty
-              ? _buildEmpty()
-              : ListView.builder(
-                  padding: const EdgeInsets.only(bottom: 120),
-                  itemCount: downloads.length,
-                  itemBuilder: (context, i) {
-                    final item = downloads[i];
-                    return _DownloadTile(
-                      item: item,
-                      animIndex: i,
-                      onDelete: () => DownloadService.removeDownload(item.video.id),
-                    );
-                  },
+      body: Stack(
+        children: [
+          FadeTransition(
+            opacity: _fade,
+            child: SlideTransition(
+              position: _slide,
+              child: downloads.isEmpty
+                  ? _buildEmpty()
+                  : Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Padding(
+                          padding: EdgeInsets.fromLTRB(16, 16, 16, 4),
+                          child: Text('Recent Downloads',
+                              style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.bold)),
+                        ),
+                        Expanded(
+                          child: ListView.builder(
+                            padding: const EdgeInsets.only(bottom: 120),
+                            itemCount: downloads.length,
+                            itemBuilder: (context, i) {
+                              final item = downloads[i];
+                              return _DownloadTile(
+                                item: item,
+                                animIndex: i,
+                                selected: _selectedIds.contains(item.video.id),
+                                onLongPress: () => _toggleSelection(item.video.id),
+                                onTap: _selectedIds.isEmpty
+                                    ? null
+                                    : () => _toggleSelection(item.video.id),
+                                onDelete: () => _deleteSelected(),
+                              );
+                            },
+                          ),
+                        ),
+                      ],
+                    ),
+            ),
+          ),
+          AnimatedSlide(
+            offset: _selectedIds.isEmpty ? const Offset(0, 1.2) : Offset.zero,
+            duration: const Duration(milliseconds: 260),
+            curve: Curves.easeOutCubic,
+            child: Align(
+              alignment: Alignment.bottomCenter,
+              child: SafeArea(
+                child: Container(
+                  margin: const EdgeInsets.all(16),
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF292929),
+                    borderRadius: BorderRadius.circular(18),
+                    border: Border.all(color: Colors.red.withOpacity(0.35)),
+                  ),
+                  child: Row(
+                    children: [
+                      IconButton(
+                        tooltip: 'Clear selection',
+                        onPressed: () => setState(() => _selectedIds.clear()),
+                        icon: const Icon(Icons.close, color: Colors.white),
+                      ),
+                      Expanded(
+                        child: Text('${_selectedIds.length} selected',
+                            style: const TextStyle(color: Colors.white)),
+                      ),
+                      IconButton(
+                        tooltip: 'Share',
+                        onPressed: _selectedIds.length == 1 ? _shareSelected : null,
+                        icon: const Icon(Icons.share_outlined),
+                        color: Colors.white,
+                      ),
+                      IconButton(
+                        tooltip: 'Delete',
+                        onPressed: _deleteSelected,
+                        icon: const Icon(Icons.delete_outline),
+                        color: Colors.redAccent,
+                      ),
+                    ],
+                  ),
                 ),
-        ),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -113,10 +240,18 @@ class _DownloadsScreenState extends State<DownloadsScreen>
 class _DownloadTile extends StatefulWidget {
   final DownloadItem item;
   final int animIndex;
+  final bool selected;
+  final VoidCallback onLongPress;
+  final VoidCallback? onTap;
   final VoidCallback onDelete;
 
   const _DownloadTile(
-      {required this.item, required this.animIndex, required this.onDelete});
+      {required this.item,
+      required this.animIndex,
+      required this.selected,
+      required this.onLongPress,
+      required this.onTap,
+      required this.onDelete});
 
   @override
   State<_DownloadTile> createState() => _DownloadTileState();
@@ -166,78 +301,251 @@ class _DownloadTileState extends State<_DownloadTile>
             child: const Icon(Icons.delete_outline, color: Colors.red, size: 28),
           ),
           onDismissed: (_) => widget.onDelete(),
-          child: Container(
+          child: GestureDetector(
+            onLongPress: widget.onLongPress,
+            onTap: widget.onTap,
+            child: Container(
             margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
             decoration: BoxDecoration(
               color: const Color(0xFF1A1A1A),
               borderRadius: BorderRadius.circular(14),
+              border: widget.selected
+                  ? Border.all(color: Colors.redAccent, width: 2)
+                  : null,
             ),
             child: Padding(
               padding: const EdgeInsets.all(12),
-              child: Row(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(8),
-                    child: Image.network(
-                      item.video.thumbnailUrl,
-                      width: 90,
-                      height: 56,
-                      fit: BoxFit.cover,
-                      errorBuilder: (_, __, ___) =>
-                          Container(width: 90, height: 56, color: Colors.grey[900]),
-                    ),
+                  Row(
+                    children: [
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(8),
+                        child: Image.network(
+                          item.video.thumbnailUrl,
+                          width: 90,
+                          height: 56,
+                          fit: BoxFit.cover,
+                          errorBuilder: (_, __, ___) =>
+                              Container(width: 90, height: 56, color: Colors.grey[900]),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              item.video.title,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w500),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(item.video.channelName,
+                                style: TextStyle(
+                                    color: Colors.grey[500], fontSize: 11)),
+                          ],
+                        ),
+                      ),
+                    ],
                   ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+                  const SizedBox(height: 10),
+                  if (!item.isComplete) ...[
+                    // Dino game loading animation
+                    SizedBox(
+                      height: 40,
+                      child: _DinoLoadingAnimation(progress: item.progress),
+                    ),
+                    const SizedBox(height: 8),
+                    // Stats row
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
                         Text(
-                          item.video.title,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 13,
-                              fontWeight: FontWeight.w500),
+                          '${item.formattedReceivedSize} / ${item.formattedTotalSize}',
+                          style: TextStyle(color: Colors.grey[400], fontSize: 11),
                         ),
-                        const SizedBox(height: 4),
-                        Text(item.video.channelName,
-                            style: TextStyle(
-                                color: Colors.grey[500], fontSize: 11)),
-                        const SizedBox(height: 8),
-                        if (!item.isComplete) ...[
-                          LinearProgressIndicator(
-                            value: item.progress,
-                            backgroundColor: Colors.grey[800],
-                            valueColor: const AlwaysStoppedAnimation<Color>(Colors.red),
-                            minHeight: 3,
-                            borderRadius: BorderRadius.circular(2),
-                          ),
-                          const SizedBox(height: 4),
-                          Text('${(item.progress * 100).toInt()}%',
-                              style: TextStyle(
-                                  color: Colors.grey[500], fontSize: 11)),
-                        ] else
+                        Text(
+                          '${(item.progress * 100).toInt()}%',
+                          style: const TextStyle(color: Colors.red, fontSize: 12, fontWeight: FontWeight.bold),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Row(
+                          children: [
+                            Icon(Icons.speed, color: Colors.grey[500], size: 14),
+                            const SizedBox(width: 4),
+                            Text(item.formattedSpeed, style: TextStyle(color: Colors.grey[400], fontSize: 11)),
+                          ],
+                        ),
+                        if (item.availableStorageMB > 0)
                           Row(
                             children: [
-                              const Icon(Icons.check_circle,
-                                  color: Colors.green, size: 14),
+                              Icon(Icons.storage, color: Colors.grey[500], size: 14),
                               const SizedBox(width: 4),
-                              Text('Downloaded',
-                                  style: TextStyle(
-                                      color: Colors.grey[400], fontSize: 11)),
+                              Text('${item.availableStorageMB} MB free', style: TextStyle(color: Colors.grey[400], fontSize: 11)),
                             ],
                           ),
                       ],
                     ),
-                  ),
+                  ] else
+                    Row(
+                      children: [
+                        const Icon(Icons.check_circle,
+                            color: Colors.green, size: 14),
+                        const SizedBox(width: 4),
+                        Text('Downloaded • ${item.formattedTotalSize}',
+                            style: TextStyle(
+                                color: Colors.grey[400], fontSize: 11)),
+                      ],
+                    ),
                 ],
               ),
+            ),
             ),
           ),
         ),
       ),
     );
   }
+}
+
+/// Dino jump loading animation — a simple T-Rex running across the screen
+class _DinoLoadingAnimation extends StatefulWidget {
+  final double progress;
+  const _DinoLoadingAnimation({required this.progress});
+
+  @override
+  State<_DinoLoadingAnimation> createState() => _DinoLoadingAnimationState();
+}
+
+class _DinoLoadingAnimationState extends State<_DinoLoadingAnimation>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _runCtrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _runCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 600),
+    )..repeat();
+  }
+
+  @override
+  void dispose() {
+    _runCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _runCtrl,
+      builder: (context, _) {
+        return CustomPaint(
+          size: const Size(double.infinity, 40),
+          painter: _DinoPainter(
+            progress: widget.progress,
+            runPhase: _runCtrl.value,
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _DinoPainter extends CustomPainter {
+  final double progress;
+  final double runPhase;
+  _DinoPainter({required this.progress, required this.runPhase});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final groundY = size.height - 4;
+    final groundPaint = Paint()
+      ..color = Colors.grey[700]!
+      ..strokeWidth = 1;
+
+    // Ground line
+    canvas.drawLine(Offset(0, groundY), Offset(size.width, groundY), groundPaint);
+
+    // Progress bar (ground fill)
+    final progressPaint = Paint()
+      ..color = Colors.red.withOpacity(0.3)
+      ..strokeWidth = 3;
+    canvas.drawLine(Offset(0, groundY + 2), Offset(size.width * progress, groundY + 2), progressPaint);
+
+    // Dino position based on progress
+    final dinoX = size.width * progress;
+    final jumpHeight = sin(runPhase * pi * 2) * 12;
+    final dinoY = groundY - 16 - (jumpHeight > 0 ? jumpHeight : 0);
+
+    // Draw dino body (simple T-Rex shape)
+    final dinoPaint = Paint()..color = Colors.white;
+    
+    // Body
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(Rect.fromLTWH(dinoX - 6, dinoY - 8, 12, 14), const Radius.circular(2)),
+      dinoPaint,
+    );
+    // Head
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(Rect.fromLTWH(dinoX - 2, dinoY - 14, 10, 8), const Radius.circular(2)),
+      dinoPaint,
+    );
+    // Eye
+    canvas.drawCircle(Offset(dinoX + 4, dinoY - 11), 1.5, Paint()..color = Colors.black);
+    
+    // Legs (alternate based on run phase)
+    final legPaint = Paint()
+      ..color = Colors.white
+      ..strokeWidth = 2
+      ..strokeCap = StrokeCap.round;
+    
+    if (runPhase < 0.5) {
+      // Left leg forward
+      canvas.drawLine(Offset(dinoX - 3, dinoY + 6), Offset(dinoX - 5, groundY), legPaint);
+      canvas.drawLine(Offset(dinoX + 3, dinoY + 6), Offset(dinoX + 1, groundY), legPaint);
+    } else {
+      // Right leg forward
+      canvas.drawLine(Offset(dinoX - 3, dinoY + 6), Offset(dinoX - 1, groundY), legPaint);
+      canvas.drawLine(Offset(dinoX + 3, dinoY + 6), Offset(dinoX + 5, groundY), legPaint);
+    }
+
+    // Tail
+    canvas.drawLine(
+      Offset(dinoX - 6, dinoY - 2),
+      Offset(dinoX - 14, dinoY - 6 + sin(runPhase * pi * 4) * 2),
+      legPaint,
+    );
+
+    // Cacti (static obstacles)
+    final cactusPaint = Paint()..color = Colors.green[700]!;
+    for (int i = 1; i <= 4; i++) {
+      final cx = size.width * (i / 5);
+      if ((cx - dinoX).abs() > 20) { // Don't draw cactus on top of dino
+        // Trunk
+        canvas.drawRect(Rect.fromLTWH(cx - 1.5, groundY - 12, 3, 12), cactusPaint);
+        // Arms
+        canvas.drawRect(Rect.fromLTWH(cx - 5, groundY - 10, 4, 2), cactusPaint);
+        canvas.drawRect(Rect.fromLTWH(cx + 1.5, groundY - 8, 4, 2), cactusPaint);
+        canvas.drawRect(Rect.fromLTWH(cx - 5, groundY - 12, 2, 4), cactusPaint);
+        canvas.drawRect(Rect.fromLTWH(cx + 3.5, groundY - 10, 2, 4), cactusPaint);
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _DinoPainter oldDelegate) =>
+      oldDelegate.progress != progress || oldDelegate.runPhase != runPhase;
 }

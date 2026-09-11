@@ -1,13 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:video_player/video_player.dart';
-import 'package:chewie/chewie.dart';
 import 'package:youtube_explode_dart/youtube_explode_dart.dart' hide Video;
 import '../models/video.dart';
 import '../widgets/capsule_modal.dart';
 import '../services/youtube_service.dart';
 import '../services/download_service.dart';
 import 'downloads_screen.dart';
+import '../main.dart';
 import '../utils/page_transitions.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -22,14 +22,14 @@ class VideoPlayerScreen extends StatefulWidget {
 class _VideoPlayerScreenState extends State<VideoPlayerScreen>
     with TickerProviderStateMixin {
   VideoPlayerController? _videoPlayerController;
-  ChewieController? _chewieController;
-  final _yt = YoutubeExplode();
+  final _yt = YouTubeService.yt;
   bool _isLiked = false;
   bool _isDisliked = false;
   bool _isSubscribed = false;
   bool _hasError = false;
   bool _isFullscreen = false;
-  bool _showControls = true;
+  bool _isAudioOnly = false;
+  // Removed _showControls and _controlsAnim as they are moved to CustomVideoPlayer
 
   late AnimationController _likeAnim;
   late AnimationController _contentAnim;
@@ -38,11 +38,8 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
   late AnimationController _controlsAnim;
 
   final _commentController = TextEditingController();
-  final List<Map<String, String>> _comments = [
-    {'user': 'Aarav Kumar', 'text': 'This is absolutely amazing! 🔥', 'time': '2h', 'avatar': 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?q=80&w=100'},
-    {'user': 'Priya Singh', 'text': 'Best tutorial I\'ve seen this year!', 'time': '5h', 'avatar': 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?q=80&w=100'},
-    {'user': 'Rohan Dev', 'text': 'Would love a part 2 🙏', 'time': '1d', 'avatar': 'https://images.unsplash.com/photo-1570295999919-56ceb5ecca61?q=80&w=100'},
-  ];
+  List<Map<String, String>> _comments = [];
+  bool _isLoadingComments = true;
 
   // Fallback video IDs that allow embedding
   static const _fallbackIds = [
@@ -55,22 +52,77 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
   @override
   void initState() {
     super.initState();
-    _likeAnim = AnimationController(vsync: this, duration: const Duration(milliseconds: 300));
-    _contentAnim = AnimationController(vsync: this, duration: const Duration(milliseconds: 500))..forward();
+    _likeAnim = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 300));
+    _contentAnim = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 500))
+      ..forward();
     _contentFade = CurvedAnimation(parent: _contentAnim, curve: Curves.easeOut);
-    _contentSlide = Tween<Offset>(begin: const Offset(0, 0.05), end: Offset.zero)
-        .animate(CurvedAnimation(parent: _contentAnim, curve: Curves.easeOutCubic));
-    _controlsAnim = AnimationController(vsync: this, duration: const Duration(milliseconds: 250), value: 1.0);
+    _contentSlide =
+        Tween<Offset>(begin: const Offset(0, 0.05), end: Offset.zero).animate(
+            CurvedAnimation(parent: _contentAnim, curve: Curves.easeOutCubic));
 
     SystemChrome.setPreferredOrientations([
       DeviceOrientation.portraitUp,
       DeviceOrientation.landscapeLeft,
       DeviceOrientation.landscapeRight,
     ]);
-    _initPlayer(widget.video.resolvedYoutubeId);
+    final resolvedId = widget.video.resolvedYoutubeId ?? widget.video.id;
+    _initPlayer(resolvedId);
+    _loadComments(resolvedId);
+    _loadRating(resolvedId);
   }
 
-  void _initPlayer(String? videoId) async {
+  Future<void> _loadRating(String id) async {
+    final rating = await YouTubeService.getVideoRating(id);
+    if (!mounted || rating == null) return;
+    setState(() {
+      _isLiked = rating == 'like';
+      _isDisliked = rating == 'dislike';
+    });
+  }
+
+  Future<void> _rateVideo(String rating) async {
+    final id = widget.video.resolvedYoutubeId ?? widget.video.id;
+    if (!YouTubeService.isAccountConnected) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Connect your YouTube account to rate videos')));
+      return;
+    }
+    final ok = await YouTubeService.rateVideo(id, rating);
+    if (!mounted || !ok) return;
+    setState(() {
+      _isLiked = rating == 'like';
+      _isDisliked = rating == 'dislike';
+    });
+  }
+
+  Future<void> _submitComment(String text) async {
+    final id = widget.video.resolvedYoutubeId ?? widget.video.id;
+    if (!YouTubeService.isAccountConnected) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Connect your YouTube account to comment')));
+      return;
+    }
+    final commentId = await YouTubeService.postComment(id, text);
+    if (!mounted || commentId == null) return;
+    _commentController.clear();
+    final comments = await YouTubeService.fetchComments(id);
+    if (mounted) setState(() => _comments = comments);
+  }
+
+  Future<void> _loadComments(String id) async {
+    final comments = await YouTubeService.fetchComments(id);
+    if (mounted) {
+      setState(() {
+        _comments = comments;
+        _isLoadingComments = false;
+      });
+    }
+  }
+
+  void _initPlayer(String? videoId,
+      {bool audioOnly = false, Duration? startAt}) async {
     if (videoId == null) {
       setState(() => _hasError = true);
       return;
@@ -79,30 +131,37 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
 
     try {
       final manifest = await _yt.videos.streamsClient.getManifest(videoId);
-      final streamInfo = manifest.muxed.bestQuality;
-      
+      final streamInfo = audioOnly
+          ? manifest.audioOnly.withHighestBitrate()
+          : manifest.muxed.bestQuality;
+
+      final oldController = _videoPlayerController;
+
       _videoPlayerController = VideoPlayerController.networkUrl(streamInfo.url);
       await _videoPlayerController!.initialize();
 
-      _chewieController = ChewieController(
-        videoPlayerController: _videoPlayerController!,
-        autoPlay: true,
-        looping: false,
-        showControls: true,
-        allowFullScreen: false,
-        materialProgressColors: ChewieProgressColors(
-          playedColor: Colors.red,
-          handleColor: Colors.red,
-          backgroundColor: Colors.grey,
-          bufferedColor: Colors.white.withOpacity(0.5),
-        ),
-      );
-      
+      if (startAt != null) {
+        await _videoPlayerController!.seekTo(startAt);
+      }
+      _videoPlayerController!.play();
+
+      // Expose to global PIP controls
+      globalVideoController.value = _videoPlayerController;
+
+      oldController?.dispose();
+
       if (mounted) setState(() {});
     } catch (e) {
       debugPrint('Error initializing player: $e');
       if (mounted) setState(() => _hasError = true);
     }
+  }
+
+  void _toggleAudioOnly(bool val) {
+    setState(() => _isAudioOnly = val);
+    final pos = _videoPlayerController?.value.position;
+    final resolvedId = widget.video.resolvedYoutubeId ?? widget.video.id;
+    _initPlayer(resolvedId, audioOnly: val, startAt: pos);
   }
 
   void _onPlayerError() {
@@ -123,21 +182,6 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
     }
   }
 
-  void _toggleControls() {
-    setState(() => _showControls = !_showControls);
-    if (_showControls) {
-      _controlsAnim.forward();
-      Future.delayed(const Duration(seconds: 3), () {
-        if (mounted && _showControls) {
-          _controlsAnim.reverse();
-          setState(() => _showControls = false);
-        }
-      });
-    } else {
-      _controlsAnim.reverse();
-    }
-  }
-
   void _openInYouTube() async {
     final id = widget.video.resolvedYoutubeId ?? widget.video.id;
     final url = Uri.parse('https://www.youtube.com/watch?v=$id');
@@ -149,11 +193,8 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
   @override
   void dispose() {
     _videoPlayerController?.dispose();
-    _chewieController?.dispose();
-    _yt.close();
     _likeAnim.dispose();
     _contentAnim.dispose();
-    _controlsAnim.dispose();
     _commentController.dispose();
     SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
@@ -198,105 +239,38 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
   Widget _buildFullscreen() {
     return Scaffold(
       backgroundColor: Colors.black,
-      body: GestureDetector(
-        onTap: _toggleControls,
-        child: Stack(
-          children: [
-            Center(
-              child: _hasError ? _buildErrorWidget() : _buildYouTubePlayer(),
-            ),
-            // Controls overlay
-            FadeTransition(
-              opacity: _controlsAnim,
-              child: Container(
-                color: Colors.black.withOpacity(0.3),
-                child: SafeArea(
-                  child: Column(
-                    children: [
-                      // Top bar
-                      Padding(
-                        padding: const EdgeInsets.all(12),
-                        child: Row(
-                          children: [
-                            _ControlBtn(
-                              icon: Icons.close,
-                              onTap: () {
-                                _toggleFullscreen();
-                              },
-                            ),
-                            const Spacer(),
-                            _ControlBtn(icon: Icons.fullscreen_exit, onTap: _toggleFullscreen),
-                          ],
-                        ),
-                      ),
-                      const Spacer(),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          ],
-        ),
+      body: Center(
+        child: _hasError ? _buildErrorWidget() : _buildYouTubePlayer(),
       ),
     );
   }
 
   // ─── Player section (normal mode) ───────────────────────────────────────────
   Widget _buildPlayerSection() {
-    return GestureDetector(
-      onTap: _toggleControls,
-      child: Stack(
-        children: [
-          AspectRatio(
-            aspectRatio: 16 / 9,
-            child: _hasError ? _buildErrorWidget() : _buildYouTubePlayer(),
-          ),
-          // Controls overlay
-          Positioned.fill(
-            child: FadeTransition(
-              opacity: _controlsAnim,
-              child: AspectRatio(
-                aspectRatio: 16 / 9,
-                child: Container(
-                  color: Colors.black.withOpacity(0.25),
-                  child: Column(
-                    children: [
-                      // Top row: close + fullscreen
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-                        child: Row(
-                          children: [
-                            _ControlBtn(
-                              icon: Icons.arrow_back,
-                              onTap: () => Navigator.pop(context),
-                            ),
-                            const Spacer(),
-                            _ControlBtn(icon: Icons.open_in_new, onTap: _openInYouTube, tooltip: 'Watch on YouTube'),
-                            const SizedBox(width: 4),
-                            _ControlBtn(icon: Icons.fullscreen, onTap: _toggleFullscreen, tooltip: 'Fullscreen'),
-                          ],
-                        ),
-                      ),
-                      const Spacer(),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
+    return AspectRatio(
+      aspectRatio: 16 / 9,
+      child: _hasError ? _buildErrorWidget() : _buildYouTubePlayer(),
     );
   }
 
   Widget _buildYouTubePlayer() {
-    if (_chewieController == null || _videoPlayerController == null || !_videoPlayerController!.value.isInitialized) {
+    if (_videoPlayerController == null ||
+        !_videoPlayerController!.value.isInitialized) {
       return Container(
         color: Colors.black,
-        child: const Center(child: CircularProgressIndicator(color: Colors.red, strokeWidth: 2)),
+        child: const Center(
+            child:
+                CircularProgressIndicator(color: Colors.red, strokeWidth: 2)),
       );
     }
-    return Chewie(controller: _chewieController!);
+    return CustomVideoPlayer(
+      controller: _videoPlayerController!,
+      isFullscreen: _isFullscreen,
+      onFullscreenToggle: _toggleFullscreen,
+      onSettingsTap: _showSettingsSheet,
+      onMinimize: () => isPlayerExpanded.value = false,
+      onClose: () => selectedVideo.value = null,
+    );
   }
 
   // ─── Error widget (152-4 and other errors) ───────────────────────────────────
@@ -313,15 +287,21 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
               shape: BoxShape.circle,
               border: Border.all(color: Colors.red.withOpacity(0.3)),
             ),
-            child: const Icon(Icons.play_circle_outline, color: Colors.red, size: 44),
+            child: const Icon(Icons.play_circle_outline,
+                color: Colors.red, size: 44),
           ),
           const SizedBox(height: 12),
           const Text('Playback Restricted',
-              style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold)),
+              style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 15,
+                  fontWeight: FontWeight.bold)),
           const SizedBox(height: 6),
-          Text('This video cannot be played in the app.\nTap below to watch on YouTube.',
+          Text(
+              'This video cannot be played in the app.\nTap below to watch on YouTube.',
               textAlign: TextAlign.center,
-              style: TextStyle(color: Colors.grey[400], fontSize: 12, height: 1.5)),
+              style: TextStyle(
+                  color: Colors.grey[400], fontSize: 12, height: 1.5)),
           const SizedBox(height: 16),
           GestureDetector(
             onTap: _openInYouTube,
@@ -330,14 +310,20 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
               decoration: BoxDecoration(
                 color: Colors.red,
                 borderRadius: BorderRadius.circular(20),
-                boxShadow: [BoxShadow(color: Colors.red.withOpacity(0.4), blurRadius: 12)],
+                boxShadow: [
+                  BoxShadow(color: Colors.red.withOpacity(0.4), blurRadius: 12)
+                ],
               ),
               child: const Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Icon(Icons.play_arrow, color: Colors.white, size: 18),
                   SizedBox(width: 6),
-                  Text('Watch on YouTube', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+                  Text('Watch on YouTube',
+                      style: TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 13)),
                 ],
               ),
             ),
@@ -355,7 +341,11 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(widget.video.title,
-              style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w600, height: 1.4)),
+              style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                  height: 1.4)),
           const SizedBox(height: 6),
           Text('${widget.video.views} • ${widget.video.timestamp}',
               style: TextStyle(color: Colors.grey[400], fontSize: 13)),
@@ -368,25 +358,48 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
                   icon: _isLiked ? Icons.thumb_up : Icons.thumb_up_outlined,
                   label: widget.video.likes ?? '0',
                   isActive: _isLiked,
-                  onTap: () {
-                    setState(() { _isLiked = !_isLiked; if (_isLiked) _isDisliked = false; });
+                  onTap: () async {
+                    if (!YouTubeService.isAccountConnected) {
+                      await _rateVideo('like');
+                      return;
+                    }
+                    setState(() {
+                      _isLiked = !_isLiked;
+                      if (_isLiked) _isDisliked = false;
+                    });
                     _likeAnim.forward(from: 0);
+                    await _rateVideo(_isLiked ? 'like' : 'none');
                   },
                   animController: _likeAnim,
                 ),
                 const SizedBox(width: 8),
                 _ActionChip(
-                  icon: _isDisliked ? Icons.thumb_down : Icons.thumb_down_outlined,
+                  icon: _isDisliked
+                      ? Icons.thumb_down
+                      : Icons.thumb_down_outlined,
                   label: 'Dislike',
                   isActive: _isDisliked,
-                  onTap: () => setState(() { _isDisliked = !_isDisliked; if (_isDisliked) _isLiked = false; }),
+                  onTap: () async {
+                    if (!YouTubeService.isAccountConnected) {
+                      await _rateVideo('dislike');
+                      return;
+                    }
+                    setState(() {
+                      _isDisliked = !_isDisliked;
+                      if (_isDisliked) _isLiked = false;
+                    });
+                    await _rateVideo(_isDisliked ? 'dislike' : 'none');
+                  },
                 ),
                 const SizedBox(width: 8),
                 _ActionChip(
                   icon: Icons.share_outlined,
                   label: 'Share',
-                  onTap: () => showCapsuleModal(context: context,
-                      child: ShareCapsule(shareUrl: YouTubeService.shareUrl(widget.video.id), title: widget.video.title)),
+                  onTap: () => showCapsuleModal(
+                      context: context,
+                      child: ShareCapsule(
+                          shareUrl: YouTubeService.shareUrl(widget.video.id),
+                          title: widget.video.title)),
                 ),
                 const SizedBox(width: 8),
                 _ActionChip(
@@ -394,11 +407,15 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
                   label: 'Download',
                   onTap: () {
                     DownloadService.startDownload(widget.video);
-                    Navigator.push(context, FadeSlidePageRoute(page: const DownloadsScreen()));
+                    Navigator.push(context,
+                        FadeSlidePageRoute(page: const DownloadsScreen()));
                   },
                 ),
                 const SizedBox(width: 8),
-                _ActionChip(icon: Icons.hd_outlined, label: 'Quality', onTap: _showQualitySheet),
+                _ActionChip(
+                    icon: Icons.hd_outlined,
+                    label: 'Quality',
+                    onTap: _showQualitySheet),
               ],
             ),
           ),
@@ -413,7 +430,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
       child: Row(
         children: [
           CircleAvatar(
-            radius: 20, 
+            radius: 20,
             backgroundImage: NetworkImage(widget.video.channelAvatarUrl),
             onBackgroundImageError: (e, s) => {},
           ),
@@ -423,8 +440,12 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(widget.video.channelName,
-                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 15)),
-                Text('128K subscribers', style: TextStyle(color: Colors.grey[500], fontSize: 12)),
+                    style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w600,
+                        fontSize: 15)),
+                Text('Live YouTube channel data',
+                    style: TextStyle(color: Colors.grey[500], fontSize: 12)),
               ],
             ),
           ),
@@ -441,7 +462,8 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
                 _isSubscribed ? 'Subscribed ✓' : 'Subscribe',
                 style: TextStyle(
                   color: _isSubscribed ? Colors.white : Colors.black,
-                  fontWeight: FontWeight.bold, fontSize: 13,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 13,
                 ),
               ),
             ),
@@ -454,16 +476,125 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
   Widget _buildDescription() {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-      child: Container(
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(
-          color: const Color(0xFF1A1A1A),
-          borderRadius: BorderRadius.circular(12),
+      child: GestureDetector(
+        onTap: _showDescriptionSheet,
+        child: Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: const Color(0xFF1A1A1A),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Text(widget.video.views,
+                      style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 13)),
+                  const SizedBox(width: 8),
+                  Text(widget.video.timestamp,
+                      style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 13)),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Text(widget.video.description ?? 'No description provided.',
+                  style: TextStyle(
+                      color: Colors.grey[300], fontSize: 13, height: 1.5),
+                  maxLines: 3,
+                  overflow: TextOverflow.ellipsis),
+            ],
+          ),
         ),
-        child: Text(widget.video.description!,
-            style: TextStyle(color: Colors.grey[300], fontSize: 13, height: 1.5),
-            maxLines: 3, overflow: TextOverflow.ellipsis),
       ),
+    );
+  }
+
+  void _showDescriptionSheet() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF1A1A1A),
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (context) {
+        return DraggableScrollableSheet(
+          initialChildSize: 0.6,
+          minChildSize: 0.4,
+          maxChildSize: 0.9,
+          expand: false,
+          builder: (context, scrollController) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const SizedBox(height: 12),
+                Center(
+                  child: Container(
+                    width: 40,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: Colors.grey[600],
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                ),
+                const Padding(
+                  padding: EdgeInsets.all(16.0),
+                  child: Text('Description',
+                      style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold)),
+                ),
+                const Divider(color: Color(0xFF272727), height: 1),
+                Expanded(
+                  child: ListView(
+                    controller: scrollController,
+                    padding: const EdgeInsets.all(16),
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                        children: [
+                          _buildStatColumn(widget.video.likes ?? '0', 'Likes'),
+                          _buildStatColumn(widget.video.views, 'Views'),
+                          _buildStatColumn(widget.video.timestamp, 'Date'),
+                          _buildStatColumn(widget.video.duration, 'Duration'),
+                        ],
+                      ),
+                      const SizedBox(height: 24),
+                      Text(
+                        widget.video.description ?? 'No description provided.',
+                        style: const TextStyle(
+                            color: Colors.white, fontSize: 14, height: 1.5),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Widget _buildStatColumn(String value, String label) {
+    return Column(
+      children: [
+        Text(value,
+            style: const TextStyle(
+                color: Colors.white,
+                fontSize: 16,
+                fontWeight: FontWeight.bold)),
+        const SizedBox(height: 4),
+        Text(label, style: const TextStyle(color: Colors.grey, fontSize: 12)),
+      ],
     );
   }
 
@@ -474,11 +605,17 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text('Comments (${_comments.length})',
-              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15)),
+              style: const TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 15)),
           const SizedBox(height: 16),
           Row(
             children: [
-              const CircleAvatar(radius: 16, backgroundColor: Colors.red, child: Icon(Icons.person, color: Colors.white, size: 16)),
+              const CircleAvatar(
+                  radius: 16,
+                  backgroundColor: Colors.red,
+                  child: Icon(Icons.person, color: Colors.white, size: 16)),
               const SizedBox(width: 10),
               Expanded(
                 child: TextField(
@@ -487,23 +624,32 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
                   decoration: InputDecoration(
                     hintText: 'Add a comment...',
                     hintStyle: TextStyle(color: Colors.grey[600], fontSize: 14),
-                    border: const UnderlineInputBorder(borderSide: BorderSide(color: Color(0xFF272727))),
-                    focusedBorder: const UnderlineInputBorder(borderSide: BorderSide(color: Colors.red)),
-                    enabledBorder: const UnderlineInputBorder(borderSide: BorderSide(color: Color(0xFF272727))),
+                    border: const UnderlineInputBorder(
+                        borderSide: BorderSide(color: Color(0xFF272727))),
+                    focusedBorder: const UnderlineInputBorder(
+                        borderSide: BorderSide(color: Colors.red)),
+                    enabledBorder: const UnderlineInputBorder(
+                        borderSide: BorderSide(color: Color(0xFF272727))),
                   ),
                   onSubmitted: (text) {
                     if (text.trim().isEmpty) return;
-                    setState(() {
-                      _comments.insert(0, {'user': 'You', 'text': text, 'time': 'Just now', 'avatar': 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?q=80&w=100'});
-                      _commentController.clear();
-                    });
+                    _submitComment(text.trim());
                   },
                 ),
               ),
             ],
           ),
           const SizedBox(height: 20),
-          ..._comments.map((c) => _buildCommentTile(c)),
+          if (_isLoadingComments)
+            const Center(child: CircularProgressIndicator(color: Colors.red))
+          else if (_comments.isEmpty)
+            const Center(
+                child: Padding(
+                    padding: EdgeInsets.all(16.0),
+                    child: Text("No comments available",
+                        style: TextStyle(color: Colors.grey))))
+          else
+            ..._comments.map((c) => _buildCommentTile(c)),
         ],
       ),
     );
@@ -522,16 +668,81 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Row(children: [
-                  Text(c['user']!, style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600)),
+                  Text(c['user']!,
+                      style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600)),
                   const SizedBox(width: 8),
-                  Text(c['time']!, style: TextStyle(color: Colors.grey[500], fontSize: 12)),
+                  Text(c['time']!,
+                      style: TextStyle(color: Colors.grey[500], fontSize: 12)),
                 ]),
                 const SizedBox(height: 4),
-                Text(c['text']!, style: const TextStyle(color: Colors.white70, fontSize: 13, height: 1.4)),
+                Text(c['text']!,
+                    style: const TextStyle(
+                        color: Colors.white70, fontSize: 13, height: 1.4)),
               ],
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  void _showSettingsSheet() {
+    showCapsuleModal(
+      context: context,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(0, 8, 0, 32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Padding(
+                padding: EdgeInsets.fromLTRB(20, 0, 20, 12),
+                child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text('Settings',
+                        style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold)))),
+            const Divider(color: Color(0xFF272727), height: 1),
+            StatefulBuilder(builder: (context, setSheetState) {
+              return SwitchListTile(
+                title: const Text('Audio Only Stream',
+                    style: TextStyle(color: Colors.white, fontSize: 14)),
+                secondary: const Icon(Icons.audiotrack, color: Colors.white),
+                value: _isAudioOnly,
+                activeColor: Colors.red,
+                onChanged: (val) {
+                  setSheetState(() => _isAudioOnly = val);
+                  _toggleAudioOnly(val);
+                },
+              );
+            }),
+            _SettingsTile(
+                icon: Icons.hd_outlined,
+                title: 'Quality',
+                subtitle: 'Auto (1080p)'),
+            _SettingsTile(
+                icon: Icons.speed, title: 'Playback speed', subtitle: 'Normal'),
+            _SettingsTile(
+                icon: Icons.closed_caption_outlined,
+                title: 'Captions',
+                subtitle: 'English'),
+            _SettingsTile(
+                icon: Icons.audiotrack_outlined,
+                title: 'Audio track',
+                subtitle: 'Original'),
+            _SettingsTile(
+                icon: Icons.lock_outline, title: 'Lock screen', subtitle: ''),
+            _SettingsTile(
+                icon: Icons.settings_outlined,
+                title: 'More',
+                subtitle: 'Advanced settings'),
+            const SizedBox(height: 8),
+          ],
+        ),
       ),
     );
   }
@@ -544,19 +755,50 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Padding(padding: EdgeInsets.fromLTRB(20, 0, 20, 12),
-                child: Align(alignment: Alignment.centerLeft,
-                    child: Text('Video Quality', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)))),
+            const Padding(
+                padding: EdgeInsets.fromLTRB(20, 0, 20, 12),
+                child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text('Video Quality',
+                        style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold)))),
             const Divider(color: Color(0xFF272727), height: 1),
             ...['Auto', '360p', '720p', '1080p'].map((q) => ListTile(
-              title: Text(q, style: const TextStyle(color: Colors.white)),
-              trailing: q == 'Auto' ? const Icon(Icons.check, color: Colors.red) : null,
-              onTap: () => Navigator.pop(context),
-            )),
+                  title: Text(q, style: const TextStyle(color: Colors.white)),
+                  trailing: q == 'Auto'
+                      ? const Icon(Icons.check, color: Colors.red)
+                      : null,
+                  onTap: () => Navigator.pop(context),
+                )),
             const SizedBox(height: 8),
           ],
         ),
       ),
+    );
+  }
+}
+
+class _SettingsTile extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String subtitle;
+
+  const _SettingsTile(
+      {required this.icon, required this.title, required this.subtitle});
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      leading: Icon(icon, color: Colors.white),
+      title: Text(title,
+          style: const TextStyle(color: Colors.white, fontSize: 14)),
+      trailing: subtitle.isNotEmpty
+          ? Text(subtitle,
+              style: const TextStyle(color: Colors.grey, fontSize: 13))
+          : null,
+      onTap: () => Navigator.pop(context),
     );
   }
 }
@@ -576,7 +818,8 @@ class _ControlBtn extends StatelessWidget {
       child: GestureDetector(
         onTap: onTap,
         child: Container(
-          width: 36, height: 36,
+          width: 36,
+          height: 36,
           decoration: BoxDecoration(
             color: Colors.black.withOpacity(0.6),
             shape: BoxShape.circle,
@@ -596,15 +839,21 @@ class _ActionChip extends StatelessWidget {
   final VoidCallback onTap;
   final AnimationController? animController;
 
-  const _ActionChip({required this.icon, required this.label, this.isActive = false, required this.onTap, this.animController});
+  const _ActionChip(
+      {required this.icon,
+      required this.label,
+      this.isActive = false,
+      required this.onTap,
+      this.animController});
 
   @override
   Widget build(BuildContext context) {
-    Widget iconWidget = Icon(icon, color: isActive ? Colors.red : Colors.white, size: 18);
+    Widget iconWidget =
+        Icon(icon, color: isActive ? Colors.red : Colors.white, size: 18);
     if (animController != null) {
       iconWidget = ScaleTransition(
-        scale: Tween<double>(begin: 1.0, end: 1.4)
-            .animate(CurvedAnimation(parent: animController!, curve: Curves.elasticOut)),
+        scale: Tween<double>(begin: 1.0, end: 1.4).animate(
+            CurvedAnimation(parent: animController!, curve: Curves.elasticOut)),
         child: iconWidget,
       );
     }
@@ -614,16 +863,287 @@ class _ActionChip extends StatelessWidget {
         duration: const Duration(milliseconds: 200),
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
         decoration: BoxDecoration(
-          color: isActive ? Colors.red.withOpacity(0.15) : const Color(0xFF272727),
+          color:
+              isActive ? Colors.red.withOpacity(0.15) : const Color(0xFF272727),
           borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: isActive ? Colors.red.withOpacity(0.4) : Colors.transparent),
+          border: Border.all(
+              color:
+                  isActive ? Colors.red.withOpacity(0.4) : Colors.transparent),
         ),
         child: Row(mainAxisSize: MainAxisSize.min, children: [
           iconWidget,
           const SizedBox(width: 6),
-          Text(label, style: TextStyle(color: isActive ? Colors.red : Colors.white, fontSize: 13, fontWeight: FontWeight.w500)),
+          Text(label,
+              style: TextStyle(
+                  color: isActive ? Colors.red : Colors.white,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w500)),
         ]),
       ),
     );
+  }
+}
+
+class CustomVideoPlayer extends StatefulWidget {
+  final VideoPlayerController controller;
+  final VoidCallback onFullscreenToggle;
+  final bool isFullscreen;
+  final VoidCallback onSettingsTap;
+  final VoidCallback onMinimize;
+  final VoidCallback onClose;
+
+  const CustomVideoPlayer({
+    super.key,
+    required this.controller,
+    required this.onFullscreenToggle,
+    required this.isFullscreen,
+    required this.onSettingsTap,
+    required this.onMinimize,
+    required this.onClose,
+  });
+
+  @override
+  State<CustomVideoPlayer> createState() => _CustomVideoPlayerState();
+}
+
+class _CustomVideoPlayerState extends State<CustomVideoPlayer>
+    with SingleTickerProviderStateMixin {
+  bool _showControls = true;
+  late AnimationController _controlsAnim;
+
+  @override
+  void initState() {
+    super.initState();
+    _controlsAnim = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 250), value: 1.0);
+    _startHideTimer();
+  }
+
+  void _startHideTimer() {
+    Future.delayed(const Duration(seconds: 3), () {
+      if (mounted && _showControls && widget.controller.value.isPlaying) {
+        _controlsAnim.reverse();
+        setState(() => _showControls = false);
+      }
+    });
+  }
+
+  void _toggleControls() {
+    setState(() => _showControls = !_showControls);
+    if (_showControls) {
+      _controlsAnim.forward();
+      _startHideTimer();
+    } else {
+      _controlsAnim.reverse();
+    }
+  }
+
+  void _seekRelative(Duration duration) {
+    final current = widget.controller.value.position;
+    widget.controller.seekTo(current + duration);
+    _startHideTimer();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: _toggleControls,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          VideoPlayer(widget.controller),
+
+          // Double Tap zones
+          Row(
+            children: [
+              Expanded(
+                child: GestureDetector(
+                  onDoubleTap: () {
+                    _seekRelative(const Duration(seconds: -10));
+                  },
+                  child: Container(color: Colors.transparent),
+                ),
+              ),
+              Expanded(
+                child: GestureDetector(
+                  onDoubleTap: () {
+                    _seekRelative(const Duration(seconds: 10));
+                  },
+                  child: Container(color: Colors.transparent),
+                ),
+              ),
+            ],
+          ),
+
+          // Controls Overlay
+          FadeTransition(
+            opacity: _controlsAnim,
+            child: IgnorePointer(
+              ignoring: !_showControls,
+              child: Container(
+                color: Colors.black.withOpacity(0.4),
+                child: Column(
+                  children: [
+                    // Top bar
+                    if (!widget.isFullscreen)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 8, vertical: 6),
+                        child: Row(
+                          children: [
+                            _ControlBtn(
+                                icon: Icons.keyboard_arrow_down,
+                                onTap: widget.onMinimize,
+                                tooltip: 'Minimize'),
+                            const Spacer(),
+                            _ControlBtn(
+                                icon: Icons.fullscreen,
+                                onTap: widget.onFullscreenToggle,
+                                tooltip: 'Fullscreen'),
+                            const SizedBox(width: 4),
+                            _ControlBtn(
+                                icon: Icons.settings,
+                                onTap: widget.onSettingsTap,
+                                tooltip: 'Settings'),
+                            const SizedBox(width: 4),
+                            _ControlBtn(
+                                icon: Icons.close,
+                                onTap: widget.onClose,
+                                tooltip: 'Close'),
+                          ],
+                        ),
+                      )
+                    else
+                      Padding(
+                        padding: const EdgeInsets.all(12),
+                        child: Row(
+                          children: [
+                            _ControlBtn(
+                                icon: Icons.close,
+                                onTap: widget.onFullscreenToggle),
+                            const Spacer(),
+                            _ControlBtn(
+                                icon: Icons.fullscreen_exit,
+                                onTap: widget.onFullscreenToggle),
+                          ],
+                        ),
+                      ),
+
+                    const Spacer(),
+
+                    // Center play/pause
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        IconButton(
+                          icon: const Icon(Icons.replay_10,
+                              color: Colors.white, size: 36),
+                          onPressed: () =>
+                              _seekRelative(const Duration(seconds: -10)),
+                        ),
+                        const SizedBox(width: 24),
+                        ValueListenableBuilder(
+                          valueListenable: widget.controller,
+                          builder: (context, VideoPlayerValue value, child) {
+                            return GestureDetector(
+                              onTap: () {
+                                value.isPlaying
+                                    ? widget.controller.pause()
+                                    : widget.controller.play();
+                                _startHideTimer();
+                              },
+                              child: Container(
+                                decoration: const BoxDecoration(
+                                    shape: BoxShape.circle,
+                                    color: Colors.black54),
+                                padding: const EdgeInsets.all(12),
+                                child: Icon(
+                                  value.isPlaying
+                                      ? Icons.pause
+                                      : Icons.play_arrow,
+                                  color: Colors.white,
+                                  size: 48,
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                        const SizedBox(width: 24),
+                        IconButton(
+                          icon: const Icon(Icons.forward_10,
+                              color: Colors.white, size: 36),
+                          onPressed: () =>
+                              _seekRelative(const Duration(seconds: 10)),
+                        ),
+                      ],
+                    ),
+
+                    const Spacer(),
+
+                    // Bottom Timeline
+                    ValueListenableBuilder(
+                      valueListenable: widget.controller,
+                      builder: (context, VideoPlayerValue value, child) {
+                        final position = value.position;
+                        final duration = value.duration;
+                        return Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                          child: Row(
+                            children: [
+                              Text(_formatDuration(position),
+                                  style: const TextStyle(
+                                      color: Colors.white, fontSize: 12)),
+                              Expanded(
+                                child: SliderTheme(
+                                  data: SliderTheme.of(context).copyWith(
+                                    trackHeight: 2,
+                                    thumbShape: const RoundSliderThumbShape(
+                                        enabledThumbRadius: 6),
+                                    overlayShape: const RoundSliderOverlayShape(
+                                        overlayRadius: 12),
+                                    activeTrackColor: Colors.red,
+                                    inactiveTrackColor: Colors.white30,
+                                    thumbColor: Colors.red,
+                                  ),
+                                  child: Slider(
+                                    value: position.inMilliseconds
+                                        .toDouble()
+                                        .clamp(0,
+                                            duration.inMilliseconds.toDouble()),
+                                    min: 0,
+                                    max: duration.inMilliseconds.toDouble() > 0
+                                        ? duration.inMilliseconds.toDouble()
+                                        : 1,
+                                    onChanged: (val) {
+                                      widget.controller.seekTo(
+                                          Duration(milliseconds: val.toInt()));
+                                    },
+                                  ),
+                                ),
+                              ),
+                              Text(_formatDuration(duration),
+                                  style: const TextStyle(
+                                      color: Colors.white, fontSize: 12)),
+                            ],
+                          ),
+                        );
+                      },
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _formatDuration(Duration d) {
+    String twoDigits(int n) => n.toString().padLeft(2, "0");
+    String twoDigitMinutes = twoDigits(d.inMinutes.remainder(60));
+    String twoDigitSeconds = twoDigits(d.inSeconds.remainder(60));
+    if (d.inHours > 0) return "${d.inHours}:$twoDigitMinutes:$twoDigitSeconds";
+    return "$twoDigitMinutes:$twoDigitSeconds";
   }
 }

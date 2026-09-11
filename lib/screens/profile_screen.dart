@@ -46,6 +46,101 @@ class _ProfileScreenState extends State<ProfileScreen>
     super.dispose();
   }
 
+  void _showEditProfile() {
+    final nameCtrl = TextEditingController(text: _user?.displayName ?? '');
+    final photoCtrl = TextEditingController(text: _user?.photoURL ?? '');
+    showCapsuleModal(
+      context: context,
+      child: Padding(
+        padding: EdgeInsets.fromLTRB(20, 8, 20, MediaQuery.of(context).viewInsets.bottom + 32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Edit Profile', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 16),
+            const Text('Display Name', style: TextStyle(color: Colors.grey, fontSize: 12, letterSpacing: 1)),
+            const SizedBox(height: 6),
+            TextField(
+              controller: nameCtrl,
+              style: const TextStyle(color: Colors.white),
+              decoration: InputDecoration(
+                hintText: 'Enter your name...',
+                hintStyle: TextStyle(color: Colors.grey[500]),
+                filled: true,
+                fillColor: Colors.white.withOpacity(0.07),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+                focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: Colors.red)),
+              ),
+            ),
+            const SizedBox(height: 16),
+            const Text('Photo URL', style: TextStyle(color: Colors.grey, fontSize: 12, letterSpacing: 1)),
+            const SizedBox(height: 6),
+            TextField(
+              controller: photoCtrl,
+              style: const TextStyle(color: Colors.white),
+              decoration: InputDecoration(
+                hintText: 'Paste photo URL...',
+                hintStyle: TextStyle(color: Colors.grey[500]),
+                filled: true,
+                fillColor: Colors.white.withOpacity(0.07),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+                focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: Colors.red)),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text('Email: ${_user?.email ?? 'N/A'}', style: TextStyle(color: Colors.grey[500], fontSize: 12)),
+            const SizedBox(height: 20),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton(
+                onPressed: () async {
+                  try {
+                    if (nameCtrl.text.trim().isNotEmpty) {
+                      await _user?.updateDisplayName(nameCtrl.text.trim());
+                    }
+                    if (photoCtrl.text.trim().isNotEmpty) {
+                      await _user?.updatePhotoURL(photoCtrl.text.trim());
+                    }
+                    await _user?.reload();
+                    if (mounted) {
+                      Navigator.pop(context);
+                      setState(() {});
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: const Text('Profile updated successfully! ✅'),
+                          backgroundColor: const Color(0xFF1A1A1A),
+                          behavior: SnackBarBehavior.floating,
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                        ),
+                      );
+                    }
+                  } catch (e) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text('Failed to update: $e'),
+                        backgroundColor: Colors.red[900],
+                        behavior: SnackBarBehavior.floating,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      ),
+                    );
+                  }
+                },
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.red,
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  elevation: 0,
+                ),
+                child: const Text('Save Changes', style: TextStyle(fontWeight: FontWeight.bold)),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   void _showCreateOptions() {
     showCapsuleModal(
       context: context,
@@ -201,7 +296,7 @@ class _ProfileScreenState extends State<ProfileScreen>
                   onPressed: () => Navigator.pop(context),
                 ),
                 actions: [
-                  IconButton(icon: const Icon(Icons.edit_outlined, color: Colors.white), onPressed: () {}),
+                  IconButton(icon: const Icon(Icons.edit_outlined, color: Colors.white), onPressed: _showEditProfile),
                 ],
                 flexibleSpace: FlexibleSpaceBar(
                   background: Stack(

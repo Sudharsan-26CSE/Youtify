@@ -1,6 +1,8 @@
 import 'dart:math';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../services/auth_service.dart';
 import '../widgets/capsule_modal.dart';
 
@@ -106,7 +108,8 @@ class _LoginScreenState extends State<LoginScreen>
         await AuthService.signUpWithEmail(email, password, name);
       }
       if (!mounted) return;
-      Navigator.of(context).pushReplacementNamed('/home');
+      await _showPreferencesDialog();
+      if (mounted) Navigator.of(context).pushReplacementNamed('/home');
     } on FirebaseAuthException catch (e) {
       _setError(AuthService.friendlyError(e));
     } catch (_) {
@@ -124,6 +127,84 @@ class _LoginScreenState extends State<LoginScreen>
     _shakeController.forward(from: 0);
   }
 
+  Future<void> _showPreferencesDialog() async {
+    String category = 'Technology';
+    String age = '18-24';
+    String language = 'English';
+    String gender = 'Prefer not to say';
+
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          backgroundColor: const Color(0xFF1A1A1A),
+          title: const Text('Personalize Youtify',
+              style: TextStyle(color: Colors.white)),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text('Choose what you want to see first.',
+                      style: TextStyle(color: Colors.white70)),
+                ),
+                const SizedBox(height: 12),
+                _preferenceDropdown('Category', category,
+                    ['Technology', 'Gaming', 'Music', 'Sports', 'News', 'Education'],
+                    (value) => setDialogState(() => category = value!)),
+                _preferenceDropdown('Age', age,
+                    ['Under 18', '18-24', '25-34', '35+'],
+                    (value) => setDialogState(() => age = value!)),
+                _preferenceDropdown('Language', language,
+                    ['English', 'Tamil', 'Hindi', 'Malayalam', 'Telugu'],
+                    (value) => setDialogState(() => language = value!)),
+                _preferenceDropdown('Gender', gender,
+                    ['Male', 'Female', 'Non-binary', 'Prefer not to say'],
+                    (value) => setDialogState(() => gender = value!)),
+              ],
+            ),
+          ),
+          actions: [
+            FilledButton(
+              style: FilledButton.styleFrom(backgroundColor: Colors.red),
+              onPressed: () async {
+                final prefs = await SharedPreferences.getInstance();
+                await prefs.setString('user_category', category);
+                await prefs.setString('user_age', age);
+                await prefs.setString('user_language', language);
+                await prefs.setString('user_gender', gender);
+                await prefs.setStringList('home_categories', [
+                  'All', category, 'Trending', 'Music', 'Gaming', 'Technology'
+                ]);
+                if (dialogContext.mounted) Navigator.pop(dialogContext);
+              },
+              child: const Text('Continue'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _preferenceDropdown(String label, String value, List<String> options,
+      ValueChanged<String?> onChanged) {
+    return DropdownButtonFormField<String>(
+      value: value,
+      dropdownColor: const Color(0xFF292929),
+      decoration: InputDecoration(
+        labelText: label,
+        labelStyle: const TextStyle(color: Colors.white70),
+      ),
+      style: const TextStyle(color: Colors.white),
+      items: options
+          .map((option) => DropdownMenuItem(value: option, child: Text(option)))
+          .toList(),
+      onChanged: onChanged,
+    );
+  }
+
   void _handleGoogle() async {
     setState(() => _isLoading = true);
     try {
@@ -133,13 +214,33 @@ class _LoginScreenState extends State<LoginScreen>
         return;
       }
       if (!mounted) return;
-      Navigator.of(context).pushReplacementNamed('/home');
+      await _showPreferencesDialog();
+      if (mounted) Navigator.of(context).pushReplacementNamed('/home');
     } on FirebaseAuthException catch (e) {
       _setError(AuthService.friendlyError(e));
+    } on PlatformException catch (e) {
+      _setError(_googlePlatformError(e));
     } catch (_) {
       _setError('Google sign-in failed. Please try again.');
     } finally {
       if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  String _googlePlatformError(PlatformException error) {
+    switch (error.code) {
+      case 'sign_in_canceled':
+      case 'canceled':
+        return 'Google sign-in was cancelled.';
+      case 'sign_in_failed':
+      case '10':
+        return 'Google sign-in is not configured for this Android app. Check the Firebase SHA-1 and SHA-256 keys.';
+      case 'network_error':
+        return 'Google sign-in needs an internet connection.';
+      default:
+        return error.message?.isNotEmpty == true
+            ? 'Google sign-in failed: ${error.message}'
+            : 'Google sign-in failed (${error.code}). Check Firebase Google sign-in setup.';
     }
   }
 

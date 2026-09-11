@@ -9,6 +9,7 @@ import 'profile_screen.dart';
 import '../utils/page_transitions.dart';
 import '../widgets/donate_bottom_sheet.dart';
 import '../services/youtube_service.dart';
+import 'feedback_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -40,6 +41,9 @@ class _HomeScreenState extends State<HomeScreen>
 
   List<Video> _videos = [];
   bool _isLoading = true;
+  bool _isLoadingMore = false;
+  String? _nextPageToken;
+  final ScrollController _scrollController = ScrollController();
 
   List<Video> get _filteredVideos {
     return _videos;
@@ -57,22 +61,55 @@ class _HomeScreenState extends State<HomeScreen>
       begin: const Offset(0, -0.3),
       end: Offset.zero,
     ).animate(CurvedAnimation(parent: _appBarCtrl, curve: Curves.easeOutCubic));
+    _scrollController.addListener(_onScroll);
     _loadCategories();
-    _loadVideos();
+  }
+
+  void _onScroll() {
+    if (_scrollController.position.pixels >= _scrollController.position.maxScrollExtent - 200) {
+      _loadMoreVideos();
+    }
   }
 
   Future<void> _loadVideos() async {
-    setState(() => _isLoading = true);
-    List<Video> videos;
-    if (_selectedCategoryIndex == 0) {
-      videos = await YouTubeService.fetchPopularVideos();
+    setState(() {
+      _isLoading = true;
+      _nextPageToken = null;
+    });
+    
+    VideoPage page;
+    if (_selectedCategoryIndex == 0 && _categories[0] == 'All') {
+      page = await YouTubeService.fetchPopularVideos();
     } else {
-      videos = await YouTubeService.searchVideos(_categories[_selectedCategoryIndex]);
+      page = await YouTubeService.searchVideos(_categories[_selectedCategoryIndex]);
     }
+    
     if (mounted) {
       setState(() {
-        _videos = videos;
+        _videos = page.videos;
+        _nextPageToken = page.nextPageToken;
         _isLoading = false;
+      });
+    }
+  }
+
+  Future<void> _loadMoreVideos() async {
+    if (_isLoadingMore || _nextPageToken == null || _isLoading) return;
+    
+    setState(() => _isLoadingMore = true);
+    VideoPage page;
+    
+    if (_selectedCategoryIndex == 0 && _categories[0] == 'All') {
+      page = await YouTubeService.fetchPopularVideos(pageToken: _nextPageToken);
+    } else {
+      page = await YouTubeService.searchVideos(_categories[_selectedCategoryIndex], pageToken: _nextPageToken);
+    }
+    
+    if (mounted) {
+      setState(() {
+        _videos.addAll(page.videos);
+        _nextPageToken = page.nextPageToken;
+        _isLoadingMore = false;
       });
     }
   }
@@ -83,6 +120,13 @@ class _HomeScreenState extends State<HomeScreen>
     if (saved != null && saved.isNotEmpty) {
       setState(() => _categories = saved);
     }
+    final lastSearch = prefs.getString('last_search');
+    if (lastSearch != null && lastSearch.isNotEmpty) {
+      if (!_categories.contains(lastSearch)) {
+        setState(() => _categories.insert(1, lastSearch));
+      }
+    }
+    _loadVideos();
   }
 
   Future<void> _saveCategories() async {
@@ -93,6 +137,7 @@ class _HomeScreenState extends State<HomeScreen>
   @override
   void dispose() {
     _appBarCtrl.dispose();
+    _scrollController.dispose();
     super.dispose();
   }
 
@@ -298,6 +343,7 @@ class _HomeScreenState extends State<HomeScreen>
     return Scaffold(
       backgroundColor: const Color(0xFF0F0F0F),
       body: CustomScrollView(
+        controller: _scrollController,
         physics: const BouncingScrollPhysics(),
         slivers: [
           // AppBar with entry animation
@@ -349,6 +395,14 @@ class _HomeScreenState extends State<HomeScreen>
               ),
             ),
             actions: [
+              // Feedback star
+              FadeTransition(
+                opacity: _appBarFade,
+                child: IconButton(
+                  icon: const Icon(Icons.star_outline_rounded, color: Colors.amber, size: 24),
+                  onPressed: () => Navigator.push(context, FadeSlidePageRoute(page: const FeedbackScreen())),
+                ),
+              ),
               // Notification bell
               FadeTransition(
                 opacity: _appBarFade,
@@ -519,23 +573,29 @@ class _HomeScreenState extends State<HomeScreen>
                 : SliverList(
                     delegate: SliverChildBuilderDelegate(
                       (context, index) {
-                        final video = _filteredVideos[
-                            index % _filteredVideos.length];
                         return VideoCard(
-                          video: video,
-                          animationIndex: index,
+                          video: _filteredVideos[index],
+                          animationIndex: index > 10 ? 0 : index,
                         );
                       },
-                      childCount: _filteredVideos.isEmpty
-                          ? 0
-                          : 10,
+                      childCount: _filteredVideos.length,
                     ),
                   ),
           ),
+          if (_isLoadingMore)
+            const SliverToBoxAdapter(
+              child: Padding(
+                padding: EdgeInsets.only(bottom: 120),
+                child: Center(
+                  child: CircularProgressIndicator(color: Colors.red),
+                ),
+              ),
+            ),
         ],
       ),
     );
   }
+
 }
 
 class _NotifTile extends StatelessWidget {

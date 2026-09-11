@@ -21,6 +21,7 @@ dependencies:
   video_player: ^2.8.3
   chewie: ^1.7.4
   youtube_explode_dart: ^2.2.2
+  audio_session: ^0.1.18
 
   # UI & Animations
   animations: ^2.0.11
@@ -35,9 +36,17 @@ dependencies:
   package_info_plus: ^5.0.1
   screen_brightness: ^0.2.2+1
 
-  # Networking
+  # Networking & Files
   http: ^1.2.0
   flutter_dotenv: ^5.1.0
+  dio: ^5.4.0
+  
+  # Storage & Permissions
+  path_provider: ^2.1.2
+  permission_handler: ^11.3.0
+  flutter_local_notifications: ^17.0.0
+  
+  # UI Components
 
 dev_dependencies:
   flutter_test:

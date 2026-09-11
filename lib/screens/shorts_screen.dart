@@ -1,6 +1,14 @@
+import 'dart:async';
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
+import 'package:youtube_explode_dart/youtube_explode_dart.dart' hide Video;
 import '../models/video.dart';
+import '../services/youtube_service.dart';
+import '../widgets/capsule_modal.dart';
+import 'search_screen.dart';
+import 'feedback_screen.dart';
+import '../utils/page_transitions.dart';
 
 class ShortsScreen extends StatefulWidget {
   const ShortsScreen({super.key});
@@ -11,8 +19,34 @@ class ShortsScreen extends StatefulWidget {
 
 class _ShortsScreenState extends State<ShortsScreen> {
   final PageController _pageController = PageController();
-  final List<Video> _shorts = Video.getShortsVideos();
+  List<Video> _shorts = [];
   int _currentPage = 0;
+  bool _isLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadShorts();
+  }
+
+  Future<void> _loadShorts() async {
+    final shorts = await YouTubeService.fetchShorts();
+    if (mounted) {
+      setState(() {
+        _shorts = shorts;
+        _isLoading = false;
+      });
+    }
+  }
+
+  void _removeShort(int index) {
+    setState(() {
+      _shorts.removeAt(index);
+      if (_currentPage >= _shorts.length && _shorts.isNotEmpty) {
+        _currentPage = _shorts.length - 1;
+      }
+    });
+  }
 
   @override
   void dispose() {
@@ -22,6 +56,27 @@ class _ShortsScreenState extends State<ShortsScreen> {
 
   @override
   Widget build(BuildContext context) {
+    if (_isLoading) {
+      return const Scaffold(
+        backgroundColor: Colors.black,
+        body: Center(child: CircularProgressIndicator(color: Colors.red)),
+      );
+    }
+    if (_shorts.isEmpty) {
+      return Scaffold(
+        backgroundColor: Colors.black,
+        body: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.bolt, color: Colors.grey[600], size: 64),
+              const SizedBox(height: 16),
+              Text('No shorts available', style: TextStyle(color: Colors.grey[400], fontSize: 16)),
+            ],
+          ),
+        ),
+      );
+    }
     return Scaffold(
       backgroundColor: Colors.black,
       body: PageView.builder(
@@ -30,7 +85,11 @@ class _ShortsScreenState extends State<ShortsScreen> {
         itemCount: _shorts.length,
         onPageChanged: (i) => setState(() => _currentPage = i),
         itemBuilder: (context, index) {
-          return _ShortPage(short: _shorts[index], isActive: index == _currentPage);
+          return _ShortPage(
+            short: _shorts[index],
+            isActive: index == _currentPage,
+            onNotInterested: () => _removeShort(index),
+          );
         },
       ),
     );
@@ -40,26 +99,33 @@ class _ShortsScreenState extends State<ShortsScreen> {
 class _ShortPage extends StatefulWidget {
   final Video short;
   final bool isActive;
+  final VoidCallback onNotInterested;
 
-  const _ShortPage({required this.short, required this.isActive});
+  const _ShortPage({required this.short, required this.isActive, required this.onNotInterested});
 
   @override
   State<_ShortPage> createState() => _ShortPageState();
 }
 
 class _ShortPageState extends State<_ShortPage>
-    with SingleTickerProviderStateMixin {
+  with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   VideoPlayerController? _vpCtrl;
   bool _isLiked = false;
   bool _isSaved = false;
+  bool _showPlaybackIcon = false;
+  Timer? _playbackIconTimer;
+  int _loadRequest = 0;
   int _likeCount = 45200;
   late AnimationController _entryCtrl;
   late Animation<Offset> _rightPanelSlide;
   late Animation<Offset> _bottomPanelSlide;
 
+  final _yt = YouTubeService.yt;
+
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _entryCtrl = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 500),
@@ -83,22 +149,63 @@ class _ShortPageState extends State<_ShortPage>
     if (widget.isActive && !old.isActive) {
       _startVideo();
     } else if (!widget.isActive && old.isActive) {
-      _vpCtrl?.pause();
+      _stopVideo();
       _entryCtrl.reset();
     }
   }
 
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.paused ||
+        state == AppLifecycleState.detached) {
+      _stopVideo();
+    }
+  }
+
+  void _stopVideo() {
+    _loadRequest++;
+    final controller = _vpCtrl;
+    _vpCtrl = null;
+    controller?.pause();
+    controller?.dispose();
+    if (mounted) setState(() {});
+  }
+
   Future<void> _startVideo() async {
-    final url = widget.short.videoUrl ??
-        'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4';
-    _vpCtrl = VideoPlayerController.networkUrl(Uri.parse(url));
+    final request = ++_loadRequest;
+    String url = 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4';
+    
     try {
-      await _vpCtrl!.initialize();
-      _vpCtrl!.setLooping(true);
-      _vpCtrl!.play();
+      final videoId = widget.short.resolvedYoutubeId ?? widget.short.id;
+      final manifest = await _yt.videos.streamsClient.getManifest(videoId);
+      
+      if (manifest.muxed.isNotEmpty) {
+        final streamInfo = manifest.muxed.withHighestBitrate();
+        url = streamInfo.url.toString();
+      } else {
+        debugPrint('No muxed streams found for Short $videoId');
+      }
+    } catch (e) {
+      debugPrint('Error fetching stream for Short: $e');
+    }
+
+    if (!mounted || !widget.isActive || request != _loadRequest) return;
+    final controller = VideoPlayerController.networkUrl(Uri.parse(url));
+    _vpCtrl = controller;
+    try {
+      await controller.initialize();
+      if (!mounted || !widget.isActive || request != _loadRequest) {
+        await controller.dispose();
+        if (identical(_vpCtrl, controller)) _vpCtrl = null;
+        return;
+      }
+      controller.setLooping(true);
+      controller.play();
       _entryCtrl.forward();
       if (mounted) setState(() {});
-    } catch (_) {
+    } catch (e) {
+      debugPrint('Error initializing VideoPlayer: $e');
       _entryCtrl.forward();
       if (mounted) setState(() {});
     }
@@ -106,6 +213,10 @@ class _ShortPageState extends State<_ShortPage>
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _playbackIconTimer?.cancel();
+    _loadRequest++;
+    _vpCtrl?.pause();
     _vpCtrl?.dispose();
     _entryCtrl.dispose();
     super.dispose();
@@ -119,10 +230,117 @@ class _ShortPageState extends State<_ShortPage>
   }
 
   void _toggleSave() {
-    setState(() => _isSaved = !_isSaved);
+    _showSaveOptions();
+  }
+
+  void _togglePlayback() {
+    final controller = _vpCtrl;
+    if (controller == null || !controller.value.isInitialized) return;
+
+    if (controller.value.isPlaying) {
+      controller.pause();
+    } else {
+      controller.play();
+    }
+    _playbackIconTimer?.cancel();
+    setState(() => _showPlaybackIcon = true);
+    _playbackIconTimer = Timer(const Duration(milliseconds: 700), () {
+      if (mounted) setState(() => _showPlaybackIcon = false);
+    });
+  }
+
+  void _showSaveOptions() {
+    showCapsuleModal(
+      context: context,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(0, 8, 0, 32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Padding(
+              padding: EdgeInsets.fromLTRB(20, 0, 20, 12),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text('Save to...', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+              ),
+            ),
+            const Divider(color: Color(0xFF272727), height: 1),
+            CapsuleAction(
+              icon: Icons.add,
+              label: 'Create New Save List',
+              onTap: () => _showCreateListDialog(),
+            ),
+            CapsuleAction(
+              icon: Icons.watch_later_outlined,
+              label: 'Watch Later',
+              onTap: () {
+                setState(() => _isSaved = true);
+                _showSaveSnackbar('Saved to Watch Later');
+              },
+            ),
+            CapsuleAction(
+              icon: Icons.favorite_border,
+              label: 'Favorites',
+              onTap: () {
+                setState(() => _isSaved = true);
+                _showSaveSnackbar('Saved to Favorites');
+              },
+            ),
+            CapsuleAction(
+              icon: Icons.playlist_play,
+              label: 'My Playlist',
+              onTap: () {
+                setState(() => _isSaved = true);
+                _showSaveSnackbar('Saved to My Playlist');
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showCreateListDialog() {
+    final controller = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1A1A1A),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('New Save List', style: TextStyle(color: Colors.white)),
+        content: TextField(
+          controller: controller,
+          style: const TextStyle(color: Colors.white),
+          decoration: InputDecoration(
+            hintText: 'List name...',
+            hintStyle: TextStyle(color: Colors.grey[500]),
+            filled: true,
+            fillColor: Colors.white.withOpacity(0.07),
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel', style: TextStyle(color: Colors.grey))),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
+            onPressed: () {
+              Navigator.pop(ctx);
+              if (controller.text.isNotEmpty) {
+                setState(() => _isSaved = true);
+                _showSaveSnackbar('Saved to "${controller.text}"');
+              }
+            },
+            child: const Text('Create & Save', style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showSaveSnackbar(String msg) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(_isSaved ? 'Short saved! ✅' : 'Short removed from saved'),
+        content: Text('$msg ✅'),
         backgroundColor: const Color(0xFF1A1A1A),
         duration: const Duration(seconds: 2),
         behavior: SnackBarBehavior.floating,
@@ -132,29 +350,127 @@ class _ShortPageState extends State<_ShortPage>
   }
 
   void _shareShort() {
+    final url = YouTubeService.shareUrl(widget.short.id, isShort: true);
+    showCapsuleModal(
+      context: context,
+      child: ShareCapsule(shareUrl: url, title: widget.short.title),
+    );
+  }
+
+  void _showMoreOptions() {
+    showGeneralDialog(
+      context: context,
+      barrierDismissible: true,
+      barrierLabel: 'More',
+      barrierColor: Colors.black.withOpacity(0.5),
+      transitionDuration: const Duration(milliseconds: 300),
+      pageBuilder: (_, __, ___) => const SizedBox.shrink(),
+      transitionBuilder: (ctx, anim, __, child) {
+        return FadeTransition(
+          opacity: anim,
+          child: Align(
+            alignment: Alignment.center,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 32),
+              child: Material(
+                color: Colors.transparent,
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(20),
+                  child: BackdropFilter(
+                    filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF1A1A1A).withOpacity(0.9),
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(color: Colors.white.withOpacity(0.1)),
+                      ),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Padding(
+                            padding: EdgeInsets.all(16),
+                            child: Text('More Options', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+                          ),
+                          const Divider(color: Color(0xFF272727), height: 1),
+                          _GlassyTile(icon: Icons.description_outlined, label: 'Description', onTap: () {
+                            Navigator.pop(ctx);
+                            _showShortDescription();
+                          }),
+                          _GlassyTile(icon: Icons.visibility_off_outlined, label: 'Clear Screen', onTap: () => Navigator.pop(ctx)),
+                          _GlassyTile(icon: Icons.closed_caption_outlined, label: 'Captions', onTap: () => Navigator.pop(ctx)),
+                          _GlassyTile(icon: Icons.hd_outlined, label: 'Quality', onTap: () => Navigator.pop(ctx)),
+                          _GlassyTile(icon: Icons.not_interested, label: 'Not Interested', color: Colors.orange, onTap: () {
+                            Navigator.pop(ctx);
+                            widget.onNotInterested();
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: const Text('Sorry for the inconvenience. This short has been removed.'),
+                                backgroundColor: const Color(0xFF1A1A1A),
+                                behavior: SnackBarBehavior.floating,
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                              ),
+                            );
+                          }),
+                          _GlassyTile(icon: Icons.feedback_outlined, label: 'Feedback', onTap: () {
+                            Navigator.pop(ctx);
+                            Navigator.push(context, FadeSlidePageRoute(page: const FeedbackScreen()));
+                          }),
+                          const SizedBox(height: 8),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  void _showShortDescription() {
     showModalBottomSheet(
       context: context,
       backgroundColor: const Color(0xFF1A1A1A),
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (ctx) => Padding(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (ctx) => DraggableScrollableSheet(
+        initialChildSize: 0.5,
+        maxChildSize: 0.8,
+        minChildSize: 0.3,
+        expand: false,
+        builder: (ctx, scrollCtrl) => Column(
           children: [
-            const Text('Share', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
-            const SizedBox(height: 20),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceAround,
-              children: [
-                _ShareOption(icon: Icons.link, label: 'Copy Link'),
-                _ShareOption(icon: Icons.message, label: 'Message'),
-                _ShareOption(icon: Icons.share, label: 'More'),
-              ],
+            const SizedBox(height: 12),
+            Container(width: 40, height: 4, decoration: BoxDecoration(color: Colors.grey[600], borderRadius: BorderRadius.circular(2))),
+            const Padding(
+              padding: EdgeInsets.all(16),
+              child: Text('Description', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
             ),
-            const SizedBox(height: 16),
+            const Divider(color: Color(0xFF272727), height: 1),
+            Expanded(
+              child: ListView(
+                controller: scrollCtrl,
+                padding: const EdgeInsets.all(16),
+                children: [
+                  Text(widget.short.title, style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w600)),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      Text(widget.short.views, style: TextStyle(color: Colors.grey[400], fontSize: 13)),
+                      const SizedBox(width: 12),
+                      Text(widget.short.timestamp, style: TextStyle(color: Colors.grey[400], fontSize: 13)),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    widget.short.description ?? 'No description available for this short.',
+                    style: const TextStyle(color: Colors.white70, fontSize: 14, height: 1.5),
+                  ),
+                ],
+              ),
+            ),
           ],
         ),
       ),
@@ -198,6 +514,40 @@ class _ShortPageState extends State<_ShortPage>
           ),
         ),
 
+        // Tap the video to pause or resume playback.
+        if (_vpCtrl != null && _vpCtrl!.value.isInitialized)
+          Positioned.fill(
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: _togglePlayback,
+              child: Center(
+                child: ValueListenableBuilder<VideoPlayerValue>(
+                  valueListenable: _vpCtrl!,
+                  builder: (context, value, child) => AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 180),
+                    child: AnimatedOpacity(
+                      opacity: _showPlaybackIcon ? 1 : 0,
+                      duration: const Duration(milliseconds: 180),
+                      child: Container(
+                        key: ValueKey(value.isPlaying),
+                        padding: const EdgeInsets.all(14),
+                        decoration: const BoxDecoration(
+                          color: Colors.black54,
+                          shape: BoxShape.circle,
+                        ),
+                        child: Icon(
+                          value.isPlaying ? Icons.pause : Icons.play_arrow,
+                          color: Colors.white,
+                          size: 42,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+
         // Top bar
         Positioned(
           top: 44,
@@ -214,7 +564,7 @@ class _ShortPageState extends State<_ShortPage>
                 children: [
                   IconButton(
                     icon: const Icon(Icons.search, color: Colors.white, size: 26),
-                    onPressed: () {},
+                    onPressed: () => Navigator.push(context, FadeSlidePageRoute(page: const SearchScreen())),
                   ),
                   IconButton(
                     icon: const Icon(Icons.camera_alt_outlined, color: Colors.white, size: 26),
@@ -269,7 +619,7 @@ class _ShortPageState extends State<_ShortPage>
                 _buildActionButton(
                   icon: Icons.more_vert,
                   label: 'More',
-                  onTap: () {},
+                  onTap: _showMoreOptions,
                 ),
               ],
             ),
@@ -394,37 +744,102 @@ class _ShortPageState extends State<_ShortPage>
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
-      builder: (ctx) => DraggableScrollableSheet(
-        initialChildSize: 0.6,
-        maxChildSize: 0.9,
-        minChildSize: 0.4,
-        expand: false,
-        builder: (ctx, scrollCtrl) => Column(
-          children: [
-            const SizedBox(height: 12),
-            Container(width: 40, height: 4, decoration: BoxDecoration(color: Colors.grey[600], borderRadius: BorderRadius.circular(2))),
-            const Padding(
-              padding: EdgeInsets.all(16),
-              child: Text('Comments', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
-            ),
+      builder: (ctx) => _RealCommentsSheet(videoId: widget.short.resolvedYoutubeId ?? widget.short.id),
+    );
+  }
+}
+
+// Real comments sheet that fetches from YouTube
+class _RealCommentsSheet extends StatefulWidget {
+  final String videoId;
+  const _RealCommentsSheet({required this.videoId});
+
+  @override
+  State<_RealCommentsSheet> createState() => _RealCommentsSheetState();
+}
+
+class _RealCommentsSheetState extends State<_RealCommentsSheet> {
+  List<Map<String, String>> _comments = [];
+  bool _isLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadComments();
+  }
+
+  Future<void> _loadComments() async {
+    final comments = await YouTubeService.fetchComments(widget.videoId);
+    if (mounted) {
+      setState(() {
+        _comments = comments;
+        _isLoading = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return DraggableScrollableSheet(
+      initialChildSize: 0.6,
+      maxChildSize: 0.9,
+      minChildSize: 0.4,
+      expand: false,
+      builder: (ctx, scrollCtrl) => Column(
+        children: [
+          const SizedBox(height: 12),
+          Container(width: 40, height: 4, decoration: BoxDecoration(color: Colors.grey[600], borderRadius: BorderRadius.circular(2))),
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: Text('Comments (${_comments.length})', style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+          ),
+          if (_isLoading)
+            const Expanded(child: Center(child: CircularProgressIndicator(color: Colors.red)))
+          else if (_comments.isEmpty)
+            Expanded(child: Center(child: Text('No comments available', style: TextStyle(color: Colors.grey[400]))))
+          else
             Expanded(
               child: ListView.builder(
                 controller: scrollCtrl,
-                itemCount: 5,
-                itemBuilder: (ctx, i) => ListTile(
-                  leading: CircleAvatar(
-                    backgroundImage: NetworkImage(
-                      'https://images.unsplash.com/photo-153571387500${i}d1d0cf377fde?q=80&w=100',
+                itemCount: _comments.length,
+                itemBuilder: (ctx, i) {
+                  final c = _comments[i];
+                  return ListTile(
+                    leading: CircleAvatar(
+                      backgroundImage: NetworkImage(c['avatar'] ?? ''),
+                      backgroundColor: Colors.grey[800],
                     ),
-                    onBackgroundImageError: (_, __) {},
-                    backgroundColor: Colors.grey[800],
-                    child: Text(String.fromCharCode(65 + i), style: const TextStyle(color: Colors.white)),
-                  ),
-                  title: Text('User $i', style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600)),
-                  subtitle: Text('Great short! 🔥 #${i + 1}', style: TextStyle(color: Colors.grey[400], fontSize: 13)),
-                ),
+                    title: Text(c['user'] ?? '', style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600)),
+                    subtitle: Text(c['text'] ?? '', style: TextStyle(color: Colors.grey[400], fontSize: 13), maxLines: 3, overflow: TextOverflow.ellipsis),
+                    trailing: Text(c['time'] ?? '', style: TextStyle(color: Colors.grey[600], fontSize: 10)),
+                  );
+                },
               ),
             ),
+        ],
+      ),
+    );
+  }
+}
+
+class _GlassyTile extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final Color color;
+  final VoidCallback onTap;
+  const _GlassyTile({required this.icon, required this.label, this.color = Colors.white, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+        child: Row(
+          children: [
+            Icon(icon, color: color, size: 22),
+            const SizedBox(width: 16),
+            Text(label, style: TextStyle(color: color, fontSize: 14)),
           ],
         ),
       ),
