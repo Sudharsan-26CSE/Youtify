@@ -101,7 +101,7 @@ class YouTubeService {
           _activeSearchLists[query] = searchList;
         }
       } else {
-        searchList = await yt.search.getVideos(query);
+        searchList = await yt.search.search(query);
         _activeSearchLists[query] = searchList;
       }
 
@@ -110,6 +110,10 @@ class YouTubeService {
       }
 
       final videos = searchList.map((v) => _videoFromExplode(v)).toList();
+
+      if (videos.isEmpty) {
+        return VideoPage([], null);
+      }
 
       // Background resolve channel avatars
       _resolveChannelAvatarsInBackground(
@@ -244,16 +248,78 @@ class YouTubeService {
     return all;
   }
 
-  /// Search videos with guaranteed non-empty fallback
+  /// Direct YouTube scraping fallback that extracts real search results
+  static Future<List<Video>> _searchDirectYouTube(String query) async {
+    try {
+      final url = Uri.parse('https://www.youtube.com/results?search_query=${Uri.encodeQueryComponent(query)}');
+      final resp = await http.get(url, headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept-Language': 'en-US,en;q=0.9',
+      });
+      if (resp.statusCode != 200) return [];
+      final html = resp.body;
+      final match = RegExp(r'var ytInitialData = ({.*?});</script>', dotAll: true).firstMatch(html);
+      if (match == null) return [];
+      final data = jsonDecode(match.group(1)!);
+      final contents = data['contents']?['twoColumnSearchResultsRenderer']?['primaryContents']?['sectionListRenderer']?['contents'];
+      if (contents == null || contents is! List) return [];
+      final videos = <Video>[];
+      for (final section in contents) {
+        final itemSection = section['itemSectionRenderer'];
+        if (itemSection != null && itemSection['contents'] != null) {
+          for (final item in itemSection['contents']) {
+            final vr = item['videoRenderer'];
+            if (vr != null) {
+              final vidId = vr['videoId']?.toString();
+              if (vidId == null || vidId.isEmpty) continue;
+              final title = vr['title']?['runs']?[0]?['text']?.toString() ?? '';
+              final chName = vr['ownerText']?['runs']?[0]?['text']?.toString() ?? '';
+              final chId = vr['ownerText']?['runs']?[0]?['navigationEndpoint']?['browseEndpoint']?['browseId']?.toString();
+              final durStr = vr['lengthText']?['simpleText']?.toString() ?? '';
+              final viewsStr = vr['viewCountText']?['simpleText']?.toString() ?? vr['shortViewCountText']?['simpleText']?.toString() ?? 'YouTube Video';
+              final timeStr = vr['publishedTimeText']?['simpleText']?.toString() ?? 'Recently';
+              final thumb = 'https://img.youtube.com/vi/$vidId/hqdefault.jpg';
+              final avatar = (chId != null && _channelAvatarCache.containsKey(chId))
+                  ? _channelAvatarCache[chId]!
+                  : 'https://ui-avatars.com/api/?name=${Uri.encodeComponent(chName.isNotEmpty ? chName : 'YT')}&background=272727&color=fff&size=128';
+
+              videos.add(Video(
+                id: vidId,
+                title: title,
+                thumbnailUrl: thumb,
+                channelName: chName,
+                channelAvatarUrl: avatar,
+                channelId: chId,
+                views: viewsStr,
+                timestamp: timeStr,
+                duration: durStr,
+                videoUrl: 'https://www.youtube.com/watch?v=$vidId',
+                youtubeVideoId: vidId,
+              ));
+            }
+          }
+        }
+      }
+      return videos;
+    } catch (e) {
+      debugPrint('Direct YouTube search error: $e');
+      return [];
+    }
+  }
+
+  /// Search videos returning strictly relevant results matching the query
   static Future<VideoPage> searchVideos(String query,
       {String? pageToken}) async {
+    final cleanQuery = query.trim();
+    if (cleanQuery.isEmpty) return VideoPage([], null);
+
     VideoPage result = VideoPage([], null);
 
     if (_hasApiKey) {
       try {
         final params = {
           'part': 'snippet',
-          'q': query,
+          'q': cleanQuery,
           'type': 'video',
           'maxResults': '20',
           'key': _apiKey,
@@ -300,15 +366,25 @@ class YouTubeService {
       } catch (_) {}
     }
 
-    result = await _fetchVideosExplode(query, isNextPage: pageToken != null);
+    result = await _fetchVideosExplode(cleanQuery, isNextPage: pageToken != null);
     if (result.videos.isNotEmpty) {
       return result;
     }
 
-    // Fallback: search within popular channel feeds matching query
+    // Direct YouTube web fallback
+    if (pageToken == null) {
+      try {
+        final directVideos = await _searchDirectYouTube(cleanQuery);
+        if (directVideos.isNotEmpty) {
+          return VideoPage(directVideos, null);
+        }
+      } catch (_) {}
+    }
+
+    // Fallback: search within popular channel feeds matching query ONLY
     try {
       final all = await _fetchPopularChannelsFeed();
-      final qLower = query.toLowerCase();
+      final qLower = cleanQuery.toLowerCase();
       final filtered = all.where((v) =>
         v.title.toLowerCase().contains(qLower) ||
         v.channelName.toLowerCase().contains(qLower) ||
@@ -317,12 +393,10 @@ class YouTubeService {
       if (filtered.isNotEmpty) {
         return VideoPage(filtered, null);
       }
-      if (all.isNotEmpty) {
-        return VideoPage(all, null);
-      }
     } catch (_) {}
 
-    return VideoPage(Video.sampleVideos, null);
+    // Strictly return empty page when no matches exist. Never show random irrelevant videos!
+    return VideoPage([], null);
   }
 
 
