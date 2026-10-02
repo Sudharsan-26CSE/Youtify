@@ -2,9 +2,11 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import '../models/video.dart';
 import '../widgets/video_card.dart';
+import '../widgets/skeleton_loader.dart';
 import '../widgets/capsule_modal.dart';
 import '../services/youtube_service.dart';
 import '../services/auth_service.dart';
+import '../services/subscription_service.dart';
 import 'channel_profile_screen.dart';
 import 'search_screen.dart';
 import '../utils/page_transitions.dart';
@@ -22,63 +24,100 @@ class _SubscriptionsScreenState extends State<SubscriptionsScreen>
   late Animation<double> _fade;
   late Animation<Offset> _slide;
 
-  final List<Map<String, dynamic>> _fallbackChannels = [
+  static final List<Map<String, dynamic>> _defaultYouTubeChannels = [
     {
-      'name': 'CodeMaster',
+      'id': 'UCX6OQ3DkcsbYNE6H8uQQuVA',
+      'name': 'MrBeast',
       'avatar':
-          'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?q=80&w=200',
-      'watchTime': '4h 32m',
-      'subs': '1.2M',
+          'https://yt3.googleusercontent.com/nxYrc_1_2f77DoBadyxMTmv7ZpRZapHR5jbuYe7PlPd5cIRJxtNNEYyOC0ZsxaDyJJzXrnJiuDE=s900-c-k-c0x00ffffff-no-rj',
+      'subs': '318M',
+      'watchTime': 'New',
       'isNew': true,
-      'banner':
-          'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?q=80&w=1200&auto=format&fit=crop'
     },
     {
-      'name': 'FlutterDevs',
+      'id': 'UCq-Fj5jknLsUf-MWSy4_brA',
+      'name': 'T-Series',
       'avatar':
-          'https://images.unsplash.com/photo-1570295999919-56ceb5ecca61?q=80&w=200',
-      'watchTime': '2h 15m',
-      'subs': '487K',
+          'https://yt3.googleusercontent.com/VunTf0NzCeboiPjbesBdnQuxaF3Lja7UGRbBGQAWRJgMSTj9TTLO3pS1X9qPOJGCNnmPrXeY=s900-c-k-c0x00ffffff-no-rj',
+      'subs': '270M',
+      'watchTime': '2h ago',
+      'isNew': true,
+    },
+    {
+      'id': 'UCHnyfMqiRRG1u-2MsSQLbXA',
+      'name': 'Veritasium',
+      'avatar':
+          'https://yt3.googleusercontent.com/7vCbvtCqtjQ3YLgsJt7Y952MQV1sBvhllSCSxHP8_sVZdcPCBrITfhkN2RdyCuwPnsByq-1GoA=s900-c-k-c0x00ffffff-no-rj',
+      'subs': '16M',
+      'watchTime': '1d ago',
       'isNew': false,
-      'banner':
-          'https://images.unsplash.com/photo-1555066931-4365d14bab8c?q=80&w=1200&auto=format&fit=crop'
     },
     {
-      'name': 'Chillhop',
+      'id': 'UCsXVk37bltHxD1rDPwtNM8Q',
+      'name': 'Kurzgesagt',
       'avatar':
-          'https://images.unsplash.com/photo-1494790108377-be9c29b29330?q=80&w=200',
-      'watchTime': '8h 04m',
+          'https://yt3.googleusercontent.com/ytc/AIdro_n1Ribd7LwdP_qKtqWL3ZDfIgv9M1d6g78VwpHGXVR2Ir4=s900-c-k-c0x00ffffff-no-rj',
+      'subs': '22M',
+      'watchTime': '3h ago',
+      'isNew': true,
+    },
+    {
+      'id': 'UC_x5XG1OV2P6uZZ5FSM9Ttw',
+      'name': 'Google Developers',
+      'avatar':
+          'https://yt3.googleusercontent.com/Jrfy3VrP1QDikidneCoruk9MmhsQsEAgeQSELZtL2fn1pKxCjh2ohk7derV33UpetVZwt-DuRQ=s900-c-k-c0x00ffffff-no-rj',
+      'subs': '2.3M',
+      'watchTime': '5h ago',
+      'isNew': false,
+    },
+    {
+      'id': 'UCsBjURrPoezykLs9EqgamOA',
+      'name': 'Fireship',
+      'avatar':
+          'https://yt3.googleusercontent.com/3fPNbkf_xPyCleq77ZhcxyeorY97NtMHVNUbaAON_RBDH9ydL4hJkjxC8x_4mpuopkB8oI7Ct6Y=s900-c-k-c0x00ffffff-no-rj',
       'subs': '3.2M',
+      'watchTime': 'Just now',
       'isNew': true,
-      'banner':
-          'https://images.unsplash.com/photo-1518609878373-06d740f60d8b?q=80&w=1200&auto=format&fit=crop'
     },
     {
-      'name': 'TechLog',
+      'id': 'UCwXdFgeE9KYzlDdR7TG9cMw',
+      'name': 'Flutter',
       'avatar':
-          'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?q=80&w=200',
-      'watchTime': '1h 08m',
-      'subs': '210K',
+          'https://yt3.googleusercontent.com/ytc/AIdro_nqx_sCd8ZIeIcodS0sfeMKJ8rVTslmQHUe_udwGNH2Pg=s900-c-k-c0x00ffffff-no-rj',
+      'subs': '650K',
+      'watchTime': '4h ago',
       'isNew': false,
-      'banner':
-          'https://images.unsplash.com/photo-1526374965328-7f61d4dc18c5?q=80&w=1200&auto=format&fit=crop'
-    },
-    {
-      'name': 'DevLife',
-      'avatar':
-          'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?q=80&w=200',
-      'watchTime': '55m',
-      'subs': '95K',
-      'isNew': false,
-      'banner':
-          'https://images.unsplash.com/photo-1614624532983-4ce03382d63d?q=80&w=1200&auto=format&fit=crop'
     },
   ];
-  List<Map<String, dynamic>> _channels = [];
+
+  List<Map<String, dynamic>> get _channels {
+    final list = <Map<String, dynamic>>[];
+    if (SubscriptionService.channels.isNotEmpty) {
+      list.addAll(SubscriptionService.channels.map((c) => {
+            'id': c.id,
+            'name': c.name,
+            'avatar': c.avatar,
+            'subs': c.subs.isNotEmpty ? c.subs : 'Subscribed',
+            'watchTime': 'Subscribed',
+            'isNew': true,
+          }));
+    }
+    final existingIds = list.map((c) => c['id']).toSet();
+    final existingNames = list.map((c) => c['name']).toSet();
+    for (final def in _defaultYouTubeChannels) {
+      if (!existingIds.contains(def['id']) &&
+          !existingNames.contains(def['name'])) {
+        list.add(def);
+      }
+    }
+    return list;
+  }
+
   bool _isConnecting = false;
   Timer? _channelRefreshTimer;
 
   final Set<String> _unfollowed = {};
+  String? _selectedChannelName;
 
   List<Video> _videos = [];
   bool _isLoading = true;
@@ -95,24 +134,58 @@ class _SubscriptionsScreenState extends State<SubscriptionsScreen>
     _slide = Tween<Offset>(begin: const Offset(0, 0.08), end: Offset.zero)
         .animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeOutCubic));
     _scrollController.addListener(_onScroll);
-    _channels = _fallbackChannels;
-    _loadChannels();
-    _channelRefreshTimer = Timer.periodic(const Duration(minutes: 1), (_) => _loadChannels());
+    SubscriptionService.channelsNotifier.addListener(_onSubscriptionsUpdated);
     _loadVideos();
   }
 
-  Future<void> _loadChannels() async {
-    if (!YouTubeService.isAccountConnected) return;
-    final page = await YouTubeService.fetchMySubscriptions();
-    if (mounted && page.channels.isNotEmpty) {
-      setState(() => _channels = page.channels);
+  void _onSubscriptionsUpdated() {
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _filterByChannel(Map<String, dynamic> ch) async {
+    final name = ch['name'] as String;
+    final id = ch['id'] as String? ?? '';
+
+    if (_selectedChannelName == name) {
+      setState(() {
+        _selectedChannelName = null;
+        _isLoading = true;
+      });
+      await _loadVideos();
+      return;
+    }
+
+    setState(() {
+      _selectedChannelName = name;
+      _isLoading = true;
+    });
+
+    try {
+      VideoPage page = VideoPage([], null);
+      if (id.isNotEmpty && id.startsWith('UC')) {
+        page = await YouTubeService.fetchChannelVideos(id);
+      }
+      if (page.videos.isEmpty) {
+        page = await YouTubeService.searchVideos(name);
+      }
+
+      if (mounted) {
+        setState(() {
+          _videos = page.videos;
+          _isLoading = false;
+          _nextPageToken = page.nextPageToken;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
     }
   }
 
   Future<void> _connectYouTube() async {
     setState(() => _isConnecting = true);
     final connected = await AuthService.connectYouTube();
-    if (connected) await _loadChannels();
     if (mounted) {
       setState(() => _isConnecting = false);
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -132,30 +205,96 @@ class _SubscriptionsScreenState extends State<SubscriptionsScreen>
   }
 
   Future<void> _loadVideos() async {
-    final page = await YouTubeService.fetchPopularVideos();
-    if (mounted) {
-      setState(() {
-        _videos = page.videos;
-        _nextPageToken = page.nextPageToken;
-        _isLoading = false;
+    setState(() => _isLoading = true);
+    try {
+      final channels = _channels;
+      final allVideos = <Video>[];
+
+      final fetchTasks = channels.take(10).map((ch) async {
+        final id = ch['id'] as String? ?? '';
+        final name = ch['name'] as String;
+        try {
+          if (id.isNotEmpty && id.startsWith('UC')) {
+            final page = await YouTubeService.fetchChannelVideos(id);
+            if (page.videos.isNotEmpty) return page.videos;
+          }
+          final page = await YouTubeService.searchVideos(name);
+          return page.videos;
+        } catch (_) {
+          return <Video>[];
+        }
       });
+
+      final results = await Future.wait(fetchTasks);
+      final seenIds = <String>{};
+
+      int maxLen = 0;
+      for (final r in results) {
+        if (r.length > maxLen) maxLen = r.length;
+      }
+      for (int i = 0; i < maxLen; i++) {
+        for (final list in results) {
+          if (i < list.length) {
+            final v = list[i];
+            if (!seenIds.contains(v.id)) {
+              seenIds.add(v.id);
+              allVideos.add(v);
+            }
+          }
+        }
+      }
+
+      if (allVideos.isEmpty) {
+        final pop = await YouTubeService.fetchPopularVideos();
+        allVideos.addAll(pop.videos);
+      }
+
+      if (mounted) {
+        setState(() {
+          _videos = allVideos;
+          _isLoading = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
     }
   }
 
   Future<void> _loadMoreVideos() async {
-    if (_nextPageToken == null || _isLoading) return;
-    final page =
-        await YouTubeService.fetchPopularVideos(pageToken: _nextPageToken);
-    if (mounted) {
-      setState(() {
-        _videos.addAll(page.videos);
-        _nextPageToken = page.nextPageToken;
-      });
+    if (_isLoading) return;
+    if (_selectedChannelName != null) {
+      final ch = _channels.firstWhere(
+        (c) => c['name'] == _selectedChannelName,
+        orElse: () => <String, dynamic>{},
+      );
+      final id = ch['id'] as String? ?? '';
+      if (_nextPageToken != null) {
+        final page = await YouTubeService.fetchChannelVideos(id, pageToken: _nextPageToken);
+        if (mounted && page.videos.isNotEmpty) {
+          setState(() {
+            _videos.addAll(page.videos);
+            _nextPageToken = page.nextPageToken;
+          });
+        }
+      }
+    } else {
+      if (_nextPageToken != null) {
+        final page = await YouTubeService.fetchPopularVideos(pageToken: _nextPageToken);
+        if (mounted) {
+          setState(() {
+            _videos.addAll(page.videos);
+            _nextPageToken = page.nextPageToken;
+          });
+        }
+      }
     }
   }
 
   @override
   void dispose() {
+    SubscriptionService.channelsNotifier.removeListener(_onSubscriptionsUpdated);
     _ctrl.dispose();
     _scrollController.dispose();
     _channelRefreshTimer?.cancel();
@@ -166,6 +305,66 @@ class _SubscriptionsScreenState extends State<SubscriptionsScreen>
     Navigator.push(
       context,
       FadeSlidePageRoute(page: ChannelProfileScreen(channel: ch)),
+    );
+  }
+
+  Widget _buildChannelAvatar(String url, String name, {double radius = 28}) {
+    final initial = name.isNotEmpty ? name[0].toUpperCase() : 'Y';
+    return ClipOval(
+      child: Container(
+        width: radius * 2,
+        height: radius * 2,
+        color: const Color(0xFF272727),
+        child: url.isNotEmpty
+            ? Image.network(
+                url,
+                width: radius * 2,
+                height: radius * 2,
+                fit: BoxFit.cover,
+                errorBuilder: (context, error, stackTrace) {
+                  return Container(
+                    color: const Color(0xFFE50914),
+                    alignment: Alignment.center,
+                    child: Text(
+                      initial,
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                        fontSize: radius * 0.8,
+                      ),
+                    ),
+                  );
+                },
+                loadingBuilder: (context, child, loadingProgress) {
+                  if (loadingProgress == null) return child;
+                  return Container(
+                    color: const Color(0xFF272727),
+                    child: Center(
+                      child: SizedBox(
+                        width: radius * 0.7,
+                        height: radius * 0.7,
+                        child: const CircularProgressIndicator(
+                          strokeWidth: 2,
+                          valueColor: AlwaysStoppedAnimation<Color>(Colors.red),
+                        ),
+                      ),
+                    ),
+                  );
+                },
+              )
+            : Container(
+                color: const Color(0xFFE50914),
+                alignment: Alignment.center,
+                child: Text(
+                  initial,
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                    fontSize: radius * 0.8,
+                  ),
+                ),
+              ),
+      ),
     );
   }
 
@@ -181,9 +380,7 @@ class _SubscriptionsScreenState extends State<SubscriptionsScreen>
             Padding(
               padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
               child: Row(children: [
-                CircleAvatar(
-                    radius: 20,
-                    backgroundImage: NetworkImage(ch['avatar'] as String)),
+                _buildChannelAvatar(ch['avatar'] as String? ?? '', name, radius: 20),
                 const SizedBox(width: 12),
                 Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                   Text(name,
@@ -243,8 +440,12 @@ class _SubscriptionsScreenState extends State<SubscriptionsScreen>
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final bg = isDark ? const Color(0xFF0F0F0F) : Theme.of(context).scaffoldBackgroundColor;
+    final txtColor = isDark ? Colors.white : Colors.black87;
+
     return Scaffold(
-      backgroundColor: const Color(0xFF0F0F0F),
+      backgroundColor: bg,
       body: FadeTransition(
         opacity: _fade,
         child: SlideTransition(
@@ -255,11 +456,11 @@ class _SubscriptionsScreenState extends State<SubscriptionsScreen>
             slivers: [
               SliverAppBar(
                 floating: true,
-                backgroundColor: const Color(0xFF0F0F0F),
+                backgroundColor: bg,
                 elevation: 0,
-                title: const Text('Subscriptions',
+                title: Text('Subscriptions',
                     style: TextStyle(
-                        color: Colors.white,
+                        color: txtColor,
                         fontWeight: FontWeight.bold,
                         fontSize: 20)),
                 actions: [
@@ -275,11 +476,11 @@ class _SubscriptionsScreenState extends State<SubscriptionsScreen>
                             YouTubeService.isAccountConnected
                                 ? Icons.cloud_done
                                 : Icons.cloud_off,
-                            color: Colors.white),
+                            color: txtColor),
                     onPressed: _isConnecting ? null : _connectYouTube,
                   ),
                   IconButton(
-                    icon: const Icon(Icons.search, color: Colors.white),
+                    icon: Icon(Icons.search, color: txtColor),
                     onPressed: () => Navigator.push(context,
                         FadeSlidePageRoute(page: const SearchScreen())),
                   )
@@ -298,8 +499,10 @@ class _SubscriptionsScreenState extends State<SubscriptionsScreen>
                       final ch = _channels[i];
                       final name = ch['name'] as String;
                       final isUnfollowed = _unfollowed.contains(name);
+                      final isSelected = _selectedChannelName == name;
+
                       return GestureDetector(
-                        onTap: () => _openChannel(ch),
+                        onTap: () => _filterByChannel(ch),
                         onLongPress: () => _showChannelOptions(ch),
                         child: AnimatedOpacity(
                           opacity: isUnfollowed ? 0.4 : 1.0,
@@ -314,18 +517,19 @@ class _SubscriptionsScreenState extends State<SubscriptionsScreen>
                                     decoration: BoxDecoration(
                                       shape: BoxShape.circle,
                                       border: Border.all(
-                                        color: ch['isNew'] == true
+                                        color: isSelected
                                             ? Colors.red
                                             : Colors.transparent,
-                                        width: 2,
+                                        width: isSelected ? 3 : 2,
                                       ),
                                     ),
                                     child: Padding(
                                       padding: const EdgeInsets.all(2),
-                                      child: CircleAvatar(
-                                          radius: 28,
-                                          backgroundImage: NetworkImage(
-                                              ch['avatar'] as String)),
+                                      child: _buildChannelAvatar(
+                                        ch['avatar'] as String? ?? '',
+                                        name,
+                                        radius: 28,
+                                      ),
                                     ),
                                   ),
                                   Positioned(
@@ -335,12 +539,12 @@ class _SubscriptionsScreenState extends State<SubscriptionsScreen>
                                       padding: const EdgeInsets.symmetric(
                                           horizontal: 4, vertical: 2),
                                       decoration: BoxDecoration(
-                                          color: const Color(0xFF272727),
+                                          color: isDark ? const Color(0xFF272727) : const Color(0xFFE0E0E0),
                                           borderRadius:
                                               BorderRadius.circular(6)),
                                       child: Text(ch['watchTime'] as String,
-                                          style: const TextStyle(
-                                              color: Colors.white70,
+                                          style: TextStyle(
+                                              color: isDark ? Colors.white70 : Colors.black87,
                                               fontSize: 9,
                                               fontWeight: FontWeight.bold)),
                                     ),
@@ -349,8 +553,10 @@ class _SubscriptionsScreenState extends State<SubscriptionsScreen>
                               ),
                               const SizedBox(height: 6),
                               Text(name,
-                                  style: const TextStyle(
-                                      color: Colors.white, fontSize: 11)),
+                                  style: TextStyle(
+                                      color: isSelected ? Colors.red : txtColor,
+                                      fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                                      fontSize: 11)),
                               Text(ch['subs'] as String,
                                   style: TextStyle(
                                       color: Colors.grey[500], fontSize: 10)),
@@ -363,14 +569,64 @@ class _SubscriptionsScreenState extends State<SubscriptionsScreen>
                 ),
               ),
 
-              const SliverToBoxAdapter(child: SizedBox(height: 8)),
-              const SliverToBoxAdapter(
-                  child: Divider(color: Color(0xFF272727), height: 1)),
+              // Filter banner if channel is selected
+              if (_selectedChannelName != null)
+                SliverToBoxAdapter(
+                  child: Container(
+                    margin: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: Colors.red.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: Colors.red.withValues(alpha: 0.3)),
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Row(
+                          children: [
+                            const Icon(Icons.filter_list, color: Colors.red, size: 16),
+                            const SizedBox(width: 6),
+                            Text(
+                              'Videos by $_selectedChannelName',
+                              style: const TextStyle(color: Colors.red, fontWeight: FontWeight.bold, fontSize: 12),
+                            ),
+                          ],
+                        ),
+                        GestureDetector(
+                          onTap: () {
+                            setState(() {
+                              _selectedChannelName = null;
+                              _isLoading = true;
+                            });
+                            _loadVideos();
+                          },
+                          child: const Padding(
+                            padding: EdgeInsets.all(4),
+                            child: Icon(Icons.close, color: Colors.red, size: 16),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+
+              const SliverToBoxAdapter(child: SizedBox(height: 4)),
+              SliverToBoxAdapter(
+                  child: Divider(color: isDark ? const Color(0xFF272727) : const Color(0xFFE0E0E0), height: 1)),
 
               if (_isLoading)
-                const SliverFillRemaining(
+                SliverList(
+                  delegate: SliverChildBuilderDelegate(
+                    (context, index) => const VideoCardSkeleton(),
+                    childCount: 4,
+                  ),
+                )
+              else if (_videos.isEmpty)
+                SliverFillRemaining(
                   child: Center(
-                      child: CircularProgressIndicator(color: Colors.red)),
+                    child: Text('No videos found', style: TextStyle(color: Colors.grey[500])),
+                  ),
                 )
               else
                 SliverPadding(

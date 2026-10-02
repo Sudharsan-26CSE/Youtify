@@ -9,12 +9,16 @@ import 'screens/login_screen.dart';
 import 'screens/home_screen.dart';
 import 'screens/shorts_screen.dart';
 import 'screens/subscriptions_screen.dart';
-import 'screens/message_screen.dart';
+import 'screens/audio_screen.dart';
 import 'models/video.dart';
 import 'screens/video_player_screen.dart';
 import 'package:audio_session/audio_session.dart';
 import 'package:video_player/video_player.dart';
 import 'services/download_service.dart';
+import 'services/auth_service.dart';
+import 'services/user_data_service.dart';
+import 'services/subscription_service.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 /// Global theme notifier — toggled from SettingsScreen
 final themeNotifier = ValueNotifier<ThemeMode>(ThemeMode.dark);
@@ -29,10 +33,25 @@ final globalVideoController = ValueNotifier<VideoPlayerController?>(null);
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await dotenv.load(fileName: ".env");
-  await Firebase.initializeApp(
-    options: DefaultFirebaseOptions.currentPlatform,
-  );
+  try {
+    await dotenv.load(fileName: ".env");
+  } catch (e) {
+    debugPrint("dotenv load note: $e");
+  }
+
+  try {
+    await Firebase.initializeApp(
+      options: DefaultFirebaseOptions.currentPlatform,
+    );
+  } catch (e) {
+    debugPrint("Firebase.initializeApp note: $e");
+  }
+
+  try {
+    await AuthService.initGoogleSignIn();
+  } catch (e) {
+    debugPrint("GoogleSignIn init note: $e");
+  }
   SystemChrome.setSystemUIOverlayStyle(
     const SystemUiOverlayStyle(
       statusBarColor: Colors.transparent,
@@ -43,10 +62,33 @@ void main() async {
   );
   
   // Configure AudioSession for background audio support
-  final session = await AudioSession.instance;
-  await session.configure(const AudioSessionConfiguration.music());
+  try {
+    final session = await AudioSession.instance;
+    await session.configure(const AudioSessionConfiguration.music());
+  } catch (e) {
+    debugPrint("AudioSession init note: $e");
+  }
 
-  await DownloadService.init();
+  try {
+    await DownloadService.init();
+  } catch (e) {
+    debugPrint("DownloadService init note: $e");
+  }
+  try {
+    await UserDataService.init();
+  } catch (e) {
+    debugPrint("UserDataService init note: $e");
+  }
+  try {
+    await SubscriptionService.init();
+  } catch (e) {
+    debugPrint("SubscriptionService init note: $e");
+  }
+  try {
+    final prefs = await SharedPreferences.getInstance();
+    final darkMode = prefs.getBool('dark_mode') ?? true;
+    themeNotifier.value = darkMode ? ThemeMode.dark : ThemeMode.light;
+  } catch (_) {}
   runApp(const YoutifyApp());
 }
 
@@ -85,11 +127,29 @@ class YoutifyApp extends StatelessWidget {
           primary: Colors.red,
           surface: Color(0xFF212121),
           background: Color(0xFF0F0F0F),
+          onBackground: Colors.white,
+          onSurface: Colors.white,
         ),
         appBarTheme: const AppBarTheme(
           backgroundColor: Color(0xFF0F0F0F),
           elevation: 0,
+          titleTextStyle: TextStyle(
+            color: Colors.white,
+            fontSize: 20,
+            fontWeight: FontWeight.bold,
+          ),
           iconTheme: IconThemeData(color: Colors.white),
+        ),
+        textTheme: const TextTheme(
+          bodyLarge: TextStyle(color: Colors.white),
+          bodyMedium: TextStyle(color: Colors.white),
+          bodySmall: TextStyle(color: Color(0xFFAAAAAA)),
+          titleLarge: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+          titleMedium: TextStyle(color: Colors.white),
+          titleSmall: TextStyle(color: Colors.white),
+          labelLarge: TextStyle(color: Colors.white),
+          labelMedium: TextStyle(color: Colors.white),
+          labelSmall: TextStyle(color: Color(0xFFAAAAAA)),
         ),
         switchTheme: SwitchThemeData(
           thumbColor: MaterialStateProperty.resolveWith((states) =>
@@ -112,11 +172,29 @@ class YoutifyApp extends StatelessWidget {
           primary: Colors.red,
           surface: Color(0xFFFFFFFF),
           background: Color(0xFFF9F9F9),
+          onBackground: Color(0xFF0F0F0F),
+          onSurface: Color(0xFF0F0F0F),
         ),
         appBarTheme: const AppBarTheme(
           backgroundColor: Color(0xFFFFFFFF),
           elevation: 0,
+          titleTextStyle: TextStyle(
+            color: Color(0xFF0F0F0F),
+            fontSize: 20,
+            fontWeight: FontWeight.bold,
+          ),
           iconTheme: IconThemeData(color: Color(0xFF0F0F0F)),
+        ),
+        textTheme: const TextTheme(
+          bodyLarge: TextStyle(color: Color(0xFF0F0F0F)),
+          bodyMedium: TextStyle(color: Color(0xFF0F0F0F)),
+          bodySmall: TextStyle(color: Color(0xFF606060)),
+          titleLarge: TextStyle(color: Color(0xFF0F0F0F), fontWeight: FontWeight.bold),
+          titleMedium: TextStyle(color: Color(0xFF0F0F0F)),
+          titleSmall: TextStyle(color: Color(0xFF0F0F0F)),
+          labelLarge: TextStyle(color: Color(0xFF0F0F0F)),
+          labelMedium: TextStyle(color: Color(0xFF0F0F0F)),
+          labelSmall: TextStyle(color: Color(0xFF606060)),
         ),
         switchTheme: SwitchThemeData(
           thumbColor: MaterialStateProperty.resolveWith((states) =>
@@ -145,9 +223,9 @@ class _MainNavigatorState extends State<MainNavigator>
 
   final List<Widget> _screens = const [
     HomeScreen(),
+    AudioScreen(),
     ShortsScreen(),
     SubscriptionsScreen(),
-    MessageScreen(),
   ];
 
   OverlayEntry? _pipEntry;
@@ -174,86 +252,80 @@ class _MainNavigatorState extends State<MainNavigator>
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
     return PopScope(
       canPop: false,
-      onPopInvoked: (didPop) {
-        // Prevent back button from closing app — only close from recent tasks
-      },
+      onPopInvoked: (didPop) {},
       child: Scaffold(
-      backgroundColor: const Color(0xFF0F0F0F),
-      body: Stack(
-        children: [
-          IndexedStack(
-            index: _currentIndex,
-            children: _screens,
-          ),
-          // Floating Glass Capsule Bottom Nav
-          Positioned(
-            left: 16,
-            right: 16,
-            bottom: 20,
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(36),
-              child: BackdropFilter(
-                filter: ImageFilter.blur(sigmaX: 20.0, sigmaY: 20.0),
-                child: Container(
-                  height: 68,
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF1A1A1A).withOpacity(0.85),
-                    borderRadius: BorderRadius.circular(36),
-                    border: Border.all(
-                        color: Colors.white.withOpacity(0.1), width: 1),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withOpacity(0.5),
-                        blurRadius: 24,
-                        offset: const Offset(0, 8),
-                      ),
-                    ],
-                  ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceAround,
-                    children: [
-                      _NavItem(
-                          icon: Icons.home_outlined,
-                          activeIcon: Icons.home,
-                          label: 'Home',
-                          index: 0,
-                          current: _currentIndex,
-                          onTap: _onNavTap),
-                      _NavItem(
-                          icon: Icons.bolt_outlined,
-                          activeIcon: Icons.bolt,
-                          label: 'Shorts',
-                          index: 1,
-                          current: _currentIndex,
-                          onTap: _onNavTap),
-                      _NavItem(
-                          icon: Icons.subscriptions_outlined,
-                          activeIcon: Icons.subscriptions,
-                          label: 'Sub',
-                          index: 2,
-                          current: _currentIndex,
-                          onTap: _onNavTap),
-                      _NavItem(
-                          icon: Icons.message_outlined,
-                          activeIcon: Icons.message,
-                          label: 'Message',
-                          index: 3,
-                          current: _currentIndex,
-                          onTap: _onNavTap),
-                    ],
-                  ),
-                ),
+        backgroundColor: isDark ? const Color(0xFF0F0F0F) : Colors.white,
+        body: IndexedStack(
+          index: _currentIndex,
+          children: [
+            const HomeScreen(),
+            const AudioScreen(),
+            ShortsScreen(isTabActive: _currentIndex == 2),
+            const SubscriptionsScreen(),
+          ],
+        ),
+        bottomNavigationBar: Container(
+          decoration: BoxDecoration(
+            color: isDark ? const Color(0xFF0F0F0F) : Colors.white,
+            border: Border(
+              top: BorderSide(
+                color: isDark
+                    ? const Color(0xFF242424)
+                    : const Color(0xFFE5E5E5),
+                width: 1,
               ),
             ),
           ),
-        ],
+          child: SafeArea(
+            top: false,
+            child: SizedBox(
+              height: 56,
+              child: Row(
+                children: [
+                  _NavItem(
+                    icon: Icons.home_outlined,
+                    activeIcon: Icons.home,
+                    label: 'Home',
+                    index: 0,
+                    current: _currentIndex,
+                    onTap: _onNavTap,
+                  ),
+                  _NavItem(
+                    icon: Icons.music_note_outlined,
+                    activeIcon: Icons.music_note,
+                    label: 'Audio',
+                    index: 1,
+                    current: _currentIndex,
+                    onTap: _onNavTap,
+                  ),
+                  _NavItem(
+                    icon: Icons.bolt_outlined,
+                    activeIcon: Icons.bolt,
+                    label: 'Shorts',
+                    index: 2,
+                    current: _currentIndex,
+                    onTap: _onNavTap,
+                  ),
+                  _NavItem(
+                    icon: Icons.subscriptions_outlined,
+                    activeIcon: Icons.subscriptions,
+                    label: 'Subscriptions',
+                    index: 3,
+                    current: _currentIndex,
+                    onTap: _onNavTap,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
       ),
-    ),
     );
   }
-
 
   void _onNavTap(int index) {
     if (_currentIndex == index) return;
@@ -282,20 +354,21 @@ class _NavItem extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isSelected = current == index;
-    return GestureDetector(
-      onTap: () => onTap(index),
-      behavior: HitTestBehavior.opaque,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 250),
-        curve: Curves.easeOutCubic,
-        padding:
-            EdgeInsets.symmetric(horizontal: isSelected ? 16 : 12, vertical: 8),
-        decoration: BoxDecoration(
-          color:
-              isSelected ? Colors.red.withOpacity(0.18) : Colors.transparent,
-          borderRadius: BorderRadius.circular(28),
-        ),
-        child: Row(
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
+    final activeColor = Colors.redAccent;
+    final inactiveColor = isDark ? Colors.grey[400] : const Color(0xFF606060);
+    final labelColor = isSelected
+        ? (isDark ? Colors.white : const Color(0xFF0F0F0F))
+        : inactiveColor;
+
+    return Expanded(
+      child: InkWell(
+        onTap: () => onTap(index),
+        splashColor: Colors.transparent,
+        highlightColor: Colors.transparent,
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
           mainAxisSize: MainAxisSize.min,
           children: [
             AnimatedSwitcher(
@@ -305,27 +378,19 @@ class _NavItem extends StatelessWidget {
               child: Icon(
                 isSelected ? activeIcon : icon,
                 key: ValueKey(isSelected),
-                color: isSelected ? Colors.redAccent : Colors.grey[400],
+                color: isSelected ? activeColor : inactiveColor,
                 size: 24,
               ),
             ),
-            AnimatedSize(
-              duration: const Duration(milliseconds: 250),
-              curve: Curves.easeOutCubic,
-              child: isSelected
-                  ? Row(
-                      children: [
-                        const SizedBox(width: 6),
-                        Text(
-                          label,
-                          style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 13,
-                              fontWeight: FontWeight.bold),
-                        ),
-                      ],
-                    )
-                  : const SizedBox.shrink(),
+            const SizedBox(height: 3),
+            Text(
+              label,
+              style: TextStyle(
+                color: labelColor,
+                fontSize: 11,
+                fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
+                letterSpacing: 0.1,
+              ),
             ),
           ],
         ),
@@ -351,10 +416,20 @@ class GlobalPlayerOverlay extends StatelessWidget {
                     return Positioned.fill(
                       child: PopScope(
                         canPop: false,
-                        onPopInvoked: (didPop) {
-                          if (!didPop) isPlayerExpanded.value = false;
+                        onPopInvokedWithResult: (didPop, result) {
+                          if (!didPop) {
+                            try {
+                              globalVideoController.value?.pause();
+                            } catch (_) {}
+                            globalVideoController.value = null;
+                            isPlayerExpanded.value = false;
+                            selectedVideo.value = null;
+                          }
                         },
-                        child: VideoPlayerScreen(video: video),
+                        child: VideoPlayerScreen(
+                          key: ValueKey(video.id),
+                          video: video,
+                        ),
                       ),
                     );
                   } else {
@@ -381,7 +456,13 @@ class _PipWidget extends StatelessWidget {
         child: Dismissible(
           key: ValueKey(video.id),
           direction: DismissDirection.horizontal,
-          onDismissed: (_) => selectedVideo.value = null,
+          onDismissed: (_) {
+            try {
+              globalVideoController.value?.pause();
+            } catch (_) {}
+            globalVideoController.value = null;
+            selectedVideo.value = null;
+          },
           child: Material(
             elevation: 16,
             borderRadius: BorderRadius.circular(14),
@@ -424,7 +505,13 @@ class _PipWidget extends StatelessWidget {
                       Positioned(
                         top: 6, right: 6,
                         child: GestureDetector(
-                          onTap: () => selectedVideo.value = null,
+                          onTap: () {
+                            try {
+                              globalVideoController.value?.pause();
+                            } catch (_) {}
+                            globalVideoController.value = null;
+                            selectedVideo.value = null;
+                          },
                           child: Container(
                             padding: const EdgeInsets.all(4),
                             decoration: BoxDecoration(color: Colors.black.withOpacity(0.6), shape: BoxShape.circle),
@@ -462,13 +549,23 @@ class _PipWidget extends StatelessWidget {
                               },
                             ),
                             _PipBtn(
-                              icon: isPlaying ? Icons.pause : Icons.play_arrow,
                               size: 26,
                               onTap: () {
                                 if (ctrl != null) {
                                   isPlaying ? ctrl.pause() : ctrl.play();
                                 }
                               },
+                              child: isPlaying
+                                  ? const Icon(Icons.pause, color: Colors.white, size: 26)
+                                  : ClipRRect(
+                                      borderRadius: BorderRadius.circular(6),
+                                      child: Image.asset(
+                                        'assets/images/app_icon.png',
+                                        width: 26,
+                                        height: 26,
+                                        fit: BoxFit.contain,
+                                      ),
+                                    ),
                             ),
                             _PipBtn(
                               icon: Icons.forward_10,
@@ -515,10 +612,11 @@ class _PipWidget extends StatelessWidget {
 }
 
 class _PipBtn extends StatelessWidget {
-  final IconData icon;
+  final IconData? icon;
+  final Widget? child;
   final double size;
   final VoidCallback onTap;
-  const _PipBtn({required this.icon, required this.size, required this.onTap});
+  const _PipBtn({this.icon, this.child, required this.size, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
@@ -530,7 +628,7 @@ class _PipBtn extends StatelessWidget {
           color: Colors.white.withOpacity(0.08),
           shape: BoxShape.circle,
         ),
-        child: Icon(icon, color: Colors.white, size: size),
+        child: child ?? Icon(icon, color: Colors.white, size: size),
       ),
     );
   }

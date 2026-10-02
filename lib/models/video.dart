@@ -14,6 +14,7 @@ class Video {
   final String category;
   // YouTube video ID for in-app playback via youtube_player_iframe
   final String? youtubeVideoId;
+  final String? channelId;
 
   Video({
     required this.id,
@@ -30,6 +31,7 @@ class Video {
     this.likes,
     this.category = 'All',
     this.youtubeVideoId,
+    this.channelId,
   });
 
   /// Returns the YouTube video ID from either youtubeVideoId field or parsed from videoUrl
@@ -51,6 +53,78 @@ class Video {
 
   bool get isYouTubeVideo => resolvedYoutubeId != null;
 
+  Video copyWith({
+    String? id,
+    String? title,
+    String? thumbnailUrl,
+    String? channelName,
+    String? channelAvatarUrl,
+    String? views,
+    String? timestamp,
+    String? duration,
+    bool? isLive,
+    String? videoUrl,
+    String? description,
+    String? likes,
+    String? category,
+    String? youtubeVideoId,
+    String? channelId,
+  }) {
+    return Video(
+      id: id ?? this.id,
+      title: title ?? this.title,
+      thumbnailUrl: thumbnailUrl ?? this.thumbnailUrl,
+      channelName: channelName ?? this.channelName,
+      channelAvatarUrl: channelAvatarUrl ?? this.channelAvatarUrl,
+      views: views ?? this.views,
+      timestamp: timestamp ?? this.timestamp,
+      duration: duration ?? this.duration,
+      isLive: isLive ?? this.isLive,
+      videoUrl: videoUrl ?? this.videoUrl,
+      description: description ?? this.description,
+      likes: likes ?? this.likes,
+      category: category ?? this.category,
+      youtubeVideoId: youtubeVideoId ?? this.youtubeVideoId,
+      channelId: channelId ?? this.channelId,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'title': title,
+        'thumbnailUrl': thumbnailUrl,
+        'channelName': channelName,
+        'channelAvatarUrl': channelAvatarUrl,
+        'views': views,
+        'timestamp': timestamp,
+        'duration': duration,
+        'isLive': isLive,
+        'videoUrl': videoUrl,
+        'description': description,
+        'likes': likes,
+        'category': category,
+        'youtubeVideoId': youtubeVideoId,
+        'channelId': channelId,
+      };
+
+  factory Video.fromJson(Map<String, dynamic> json) => Video(
+        id: json['id'] ?? '',
+        title: json['title'] ?? '',
+        thumbnailUrl: json['thumbnailUrl'] ?? '',
+        channelName: json['channelName'] ?? '',
+        channelAvatarUrl: json['channelAvatarUrl'] ?? '',
+        views: json['views'] ?? '',
+        timestamp: json['timestamp'] ?? '',
+        duration: json['duration'] ?? '',
+        isLive: json['isLive'] ?? false,
+        videoUrl: json['videoUrl'],
+        description: json['description'],
+        likes: json['likes'],
+        category: json['category'] ?? 'All',
+        youtubeVideoId: json['youtubeVideoId'],
+        channelId: json['channelId'],
+      );
+
   static List<Video> sampleVideos = [
     Video(
       id: 'l-POWT87vH8',
@@ -65,6 +139,7 @@ class Video {
       category: 'Flutter',
       description: 'Flutter in 100 seconds. Learn the basics of Flutter and Dart.',
       youtubeVideoId: 'l-POWT87vH8',
+      channelId: 'UCsBjURrPoezykLs9EqgamOA',
     ),
     Video(
       id: 'lkF0GPEH2NU',
@@ -79,6 +154,7 @@ class Video {
       category: 'Flutter',
       description: 'SafeArea is a widget that inserts its child by sufficient padding to avoid intrusions by the operating system.',
       youtubeVideoId: 'lkF0GPEH2NU',
+      channelId: 'UCwXdFgeE9KYzlDdR7TG9cMw',
     ),
     Video(
       id: 'YE7VzlLtp-4',
@@ -94,6 +170,7 @@ class Video {
       category: 'Entertainment',
       description: 'Big Buck Bunny tells the story of a giant rabbit with a heart bigger than himself.',
       youtubeVideoId: 'YE7VzlLtp-4',
+      channelId: 'UCDB15Re0pxqHquS48wYQvXw',
     ),
     Video(
       id: 'TLkA0RELQ1g',
@@ -108,6 +185,7 @@ class Video {
       category: 'Entertainment',
       description: 'Elephants Dream is the world’s first open movie, made entirely with open source graphics software.',
       youtubeVideoId: 'TLkA0RELQ1g',
+      channelId: 'UCDB15Re0pxqHquS48wYQvXw',
     ),
     Video(
       id: 'eRsGyueVLvQ',
@@ -122,6 +200,7 @@ class Video {
       category: 'Entertainment',
       description: 'Sintel is an independently produced short film, initiated by the Blender Foundation.',
       youtubeVideoId: 'eRsGyueVLvQ',
+      channelId: 'UCDB15Re0pxqHquS48wYQvXw',
     ),
     Video(
       id: 'p7KpmQ03v4c',
@@ -136,8 +215,10 @@ class Video {
       category: 'Programming',
       description: 'Complete guide to the new Flutter features.',
       youtubeVideoId: 'p7KpmQ03v4c',
+      channelId: 'UCwXdFgeE9KYzlDdR7TG9cMw',
     ),
   ];
+
 
   static List<Video> getShortsVideos() => [
     Video(

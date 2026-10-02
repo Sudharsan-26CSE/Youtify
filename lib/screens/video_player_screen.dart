@@ -3,13 +3,26 @@ import 'package:flutter/services.dart';
 import 'package:video_player/video_player.dart';
 import 'package:youtube_explode_dart/youtube_explode_dart.dart' hide Video;
 import '../models/video.dart';
-import '../widgets/capsule_modal.dart';
 import '../services/youtube_service.dart';
 import '../services/download_service.dart';
+import '../services/user_data_service.dart';
+import '../services/subscription_service.dart';
+import '../widgets/video_card.dart';
+import '../widgets/skeleton_loader.dart';
 import 'downloads_screen.dart';
+import 'channel_profile_screen.dart';
 import '../main.dart';
 import '../utils/page_transitions.dart';
 import 'package:url_launcher/url_launcher.dart';
+
+enum VideoPlayerPopup {
+  description,
+  comments,
+  quality,
+  settings,
+  speed,
+  share,
+}
 
 class VideoPlayerScreen extends StatefulWidget {
   final Video video;
@@ -23,35 +36,40 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
     with TickerProviderStateMixin {
   VideoPlayerController? _videoPlayerController;
   final _yt = YouTubeService.yt;
+  late Video _currentVideo;
+  String? _channelSubs;
+  bool _isLoadingDetails = true;
+  VideoPlayerPopup? _activePopup;
+  late AnimationController _popupCtrl;
+  late Animation<double> _popupFadeAnim;
+  late Animation<Offset> _popupSlideAnim;
   bool _isLiked = false;
   bool _isDisliked = false;
-  bool _isSubscribed = false;
   bool _hasError = false;
   bool _isFullscreen = false;
   bool _isAudioOnly = false;
-  // Removed _showControls and _controlsAnim as they are moved to CustomVideoPlayer
+  double _playbackSpeed = 1.0;
+  String _selectedQuality = 'Auto (1080p)';
 
   late AnimationController _likeAnim;
   late AnimationController _contentAnim;
   late Animation<double> _contentFade;
   late Animation<Offset> _contentSlide;
-  late AnimationController _controlsAnim;
 
   final _commentController = TextEditingController();
   List<Map<String, String>> _comments = [];
   bool _isLoadingComments = true;
 
-  // Fallback video IDs that allow embedding
-  static const _fallbackIds = [
-    'M7lc1UVf-VE', // YouTube official test video
-    'YE7VzlLtp-4', // Big Buck Bunny on YouTube
-    'aqz-KE-bpKQ', // Relaxing music - embedding allowed
-  ];
-  int _fallbackIndex = 0;
+  List<Video> _relatedVideos = [];
+  bool _isLoadingRelated = true;
 
   @override
   void initState() {
     super.initState();
+    _currentVideo = widget.video;
+    _isLiked = UserDataService.isLiked(widget.video.id);
+    UserDataService.addToHistory(widget.video);
+
     _likeAnim = AnimationController(
         vsync: this, duration: const Duration(milliseconds: 300));
     _contentAnim = AnimationController(
@@ -62,6 +80,14 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
         Tween<Offset>(begin: const Offset(0, 0.05), end: Offset.zero).animate(
             CurvedAnimation(parent: _contentAnim, curve: Curves.easeOutCubic));
 
+    _popupCtrl = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 280));
+    _popupFadeAnim = CurvedAnimation(parent: _popupCtrl, curve: Curves.easeOut);
+    _popupSlideAnim = Tween<Offset>(
+      begin: const Offset(0, 1),
+      end: Offset.zero,
+    ).animate(CurvedAnimation(parent: _popupCtrl, curve: Curves.easeOutCubic));
+
     SystemChrome.setPreferredOrientations([
       DeviceOrientation.portraitUp,
       DeviceOrientation.landscapeLeft,
@@ -69,8 +95,86 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
     ]);
     final resolvedId = widget.video.resolvedYoutubeId ?? widget.video.id;
     _initPlayer(resolvedId);
+    _loadVideoDetails(resolvedId);
     _loadComments(resolvedId);
     _loadRating(resolvedId);
+    _loadRelatedVideos();
+  }
+
+  @override
+  void didUpdateWidget(VideoPlayerScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.video.id != widget.video.id) {
+      _currentVideo = widget.video;
+      _isLiked = UserDataService.isLiked(widget.video.id);
+      _isDisliked = false;
+      final resolvedId = widget.video.resolvedYoutubeId ?? widget.video.id;
+      _initPlayer(resolvedId);
+      _loadVideoDetails(resolvedId);
+      _loadComments(resolvedId);
+      _loadRating(resolvedId);
+      _loadRelatedVideos();
+    }
+  }
+
+  Future<void> _loadVideoDetails(String id) async {
+    try {
+      final details = await YouTubeService.fetchVideoDetails(id);
+      if (details != null && mounted) {
+        setState(() {
+          _currentVideo = details;
+          _isLoadingDetails = false;
+        });
+      }
+      final chId = details?.channelId ?? _currentVideo.channelId;
+      if (chId != null && chId.isNotEmpty) {
+        final chInfo = await YouTubeService.fetchChannelDetails(chId);
+        if (chInfo != null && mounted) {
+          setState(() {
+            if (chInfo['avatar'] != null && chInfo['avatar']!.isNotEmpty) {
+              _currentVideo = _currentVideo.copyWith(channelAvatarUrl: chInfo['avatar']!);
+            }
+            if (chInfo['subs'] != null && chInfo['subs']!.isNotEmpty) {
+              _channelSubs = chInfo['subs'];
+            }
+          });
+        }
+      }
+    } catch (e) {
+      debugPrint('Error loading video details: $e');
+    } finally {
+      if (mounted) setState(() => _isLoadingDetails = false);
+    }
+  }
+
+  void _openPopup(VideoPlayerPopup popup) {
+    setState(() => _activePopup = popup);
+    _popupCtrl.forward(from: 0);
+  }
+
+  void _closePopup() async {
+    await _popupCtrl.reverse();
+    if (mounted) setState(() => _activePopup = null);
+  }
+
+  void _showDescriptionSheet() => _openPopup(VideoPlayerPopup.description);
+  void _showCommentsSheet() => _openPopup(VideoPlayerPopup.comments);
+  void _showQualitySheet() => _openPopup(VideoPlayerPopup.quality);
+  void _showSettingsSheet() => _openPopup(VideoPlayerPopup.settings);
+  void _showSpeedSheet() => _openPopup(VideoPlayerPopup.speed);
+
+  Future<void> _loadRelatedVideos() async {
+    try {
+      final page = await YouTubeService.searchVideos(widget.video.channelName);
+      if (mounted) {
+        setState(() {
+          _relatedVideos = page.videos.where((v) => v.id != widget.video.id).toList();
+          _isLoadingRelated = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) setState(() => _isLoadingRelated = false);
+    }
   }
 
   Future<void> _loadRating(String id) async {
@@ -164,10 +268,6 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
     _initPlayer(resolvedId, audioOnly: val, startAt: pos);
   }
 
-  void _onPlayerError() {
-    if (mounted) setState(() => _hasError = true);
-  }
-
   void _toggleFullscreen() {
     setState(() => _isFullscreen = !_isFullscreen);
     if (_isFullscreen) {
@@ -190,11 +290,27 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
     }
   }
 
+  void _closeVideo() {
+    try {
+      _videoPlayerController?.pause();
+      globalVideoController.value?.pause();
+    } catch (_) {}
+    globalVideoController.value = null;
+    isPlayerExpanded.value = false;
+    selectedVideo.value = null;
+  }
+
   @override
   void dispose() {
+    try {
+      _videoPlayerController?.pause();
+      globalVideoController.value?.pause();
+    } catch (_) {}
+    globalVideoController.value = null;
     _videoPlayerController?.dispose();
     _likeAnim.dispose();
     _contentAnim.dispose();
+    _popupCtrl.dispose();
     _commentController.dispose();
     SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
@@ -204,32 +320,58 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
   @override
   Widget build(BuildContext context) {
     if (_isFullscreen) return _buildFullscreen();
-    return Scaffold(
-      backgroundColor: const Color(0xFF0F0F0F),
-      body: SafeArea(
-        child: Column(
-          children: [
-            _buildPlayerSection(),
-            Expanded(
-              child: FadeTransition(
-                opacity: _contentFade,
-                child: SlideTransition(
-                  position: _contentSlide,
-                  child: ListView(
-                    padding: const EdgeInsets.only(bottom: 120),
-                    children: [
-                      _buildTitleActions(),
-                      const Divider(color: Color(0xFF272727), thickness: 1),
-                      _buildChannelRow(),
-                      if (widget.video.description != null) _buildDescription(),
-                      const Divider(color: Color(0xFF272727), thickness: 1),
-                      _buildComments(),
-                    ],
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final bg = isDark ? const Color(0xFF0F0F0F) : Theme.of(context).scaffoldBackgroundColor;
+    final dividerColor = isDark ? const Color(0xFF272727) : const Color(0xFFE0E0E0);
+
+    return GestureDetector(
+      onVerticalDragEnd: (details) {
+        if (_activePopup != null) return;
+        if (details.primaryVelocity != null && details.primaryVelocity! > 300) {
+          _closeVideo();
+        }
+      },
+      onHorizontalDragEnd: (details) {
+        if (_activePopup != null) return;
+        if (details.primaryVelocity != null && details.primaryVelocity! > 300) {
+          _closeVideo();
+        }
+      },
+      child: Scaffold(
+        backgroundColor: bg,
+        body: SafeArea(
+          child: Stack(
+            children: [
+              Column(
+                children: [
+                  _buildPlayerSection(),
+                  Expanded(
+                    child: FadeTransition(
+                      opacity: _contentFade,
+                      child: SlideTransition(
+                        position: _contentSlide,
+                        child: ListView(
+                          padding: const EdgeInsets.only(bottom: 120),
+                          children: [
+                            _buildTitleActions(),
+                            Divider(color: dividerColor, thickness: 1),
+                            _buildChannelRow(),
+                            _buildDescription(),
+                            Divider(color: dividerColor, thickness: 1),
+                            _buildCommentsCapsule(),
+                            Divider(color: dividerColor, thickness: 1),
+                            _buildRelatedVideos(),
+                          ],
+                        ),
+                      ),
+                    ),
                   ),
-                ),
+                ],
               ),
-            ),
-          ],
+              if (_activePopup != null)
+                _buildInScreenPopupPanel(),
+            ],
+          ),
         ),
       ),
     );
@@ -268,8 +410,8 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
       isFullscreen: _isFullscreen,
       onFullscreenToggle: _toggleFullscreen,
       onSettingsTap: _showSettingsSheet,
-      onMinimize: () => isPlayerExpanded.value = false,
-      onClose: () => selectedVideo.value = null,
+      onMinimize: _closeVideo,
+      onClose: _closeVideo,
     );
   }
 
@@ -335,20 +477,21 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
 
   // ─── Title + action chips ────────────────────────────────────────────────────
   Widget _buildTitleActions() {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Padding(
       padding: const EdgeInsets.all(16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(widget.video.title,
-              style: const TextStyle(
-                  color: Colors.white,
+          Text(_currentVideo.title,
+              style: TextStyle(
+                  color: isDark ? Colors.white : Colors.black87,
                   fontSize: 16,
                   fontWeight: FontWeight.w600,
                   height: 1.4)),
           const SizedBox(height: 6),
-          Text('${widget.video.views} • ${widget.video.timestamp}',
-              style: TextStyle(color: Colors.grey[400], fontSize: 13)),
+          Text('${_currentVideo.views} • ${_currentVideo.timestamp}',
+              style: TextStyle(color: isDark ? Colors.grey[400] : Colors.grey[600], fontSize: 13)),
           const SizedBox(height: 14),
           SingleChildScrollView(
             scrollDirection: Axis.horizontal,
@@ -356,19 +499,18 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
               children: [
                 _ActionChip(
                   icon: _isLiked ? Icons.thumb_up : Icons.thumb_up_outlined,
-                  label: widget.video.likes ?? '0',
+                  label: _currentVideo.likes ?? '0',
                   isActive: _isLiked,
                   onTap: () async {
-                    if (!YouTubeService.isAccountConnected) {
-                      await _rateVideo('like');
-                      return;
-                    }
+                    UserDataService.toggleLike(_currentVideo);
                     setState(() {
-                      _isLiked = !_isLiked;
+                      _isLiked = UserDataService.isLiked(_currentVideo.id);
                       if (_isLiked) _isDisliked = false;
                     });
                     _likeAnim.forward(from: 0);
-                    await _rateVideo(_isLiked ? 'like' : 'none');
+                    if (YouTubeService.isAccountConnected) {
+                      await _rateVideo(_isLiked ? 'like' : 'none');
+                    }
                   },
                   animController: _likeAnim,
                 ),
@@ -380,35 +522,43 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
                   label: 'Dislike',
                   isActive: _isDisliked,
                   onTap: () async {
-                    if (!YouTubeService.isAccountConnected) {
-                      await _rateVideo('dislike');
-                      return;
-                    }
                     setState(() {
                       _isDisliked = !_isDisliked;
-                      if (_isDisliked) _isLiked = false;
+                      if (_isDisliked) {
+                        if (_isLiked) UserDataService.toggleLike(_currentVideo);
+                        _isLiked = false;
+                      }
                     });
-                    await _rateVideo(_isDisliked ? 'dislike' : 'none');
+                    if (YouTubeService.isAccountConnected) {
+                      await _rateVideo(_isDisliked ? 'dislike' : 'none');
+                    }
                   },
                 ),
                 const SizedBox(width: 8),
                 _ActionChip(
                   icon: Icons.share_outlined,
                   label: 'Share',
-                  onTap: () => showCapsuleModal(
-                      context: context,
-                      child: ShareCapsule(
-                          shareUrl: YouTubeService.shareUrl(widget.video.id),
-                          title: widget.video.title)),
+                  onTap: () => _openPopup(VideoPlayerPopup.share),
                 ),
                 const SizedBox(width: 8),
                 _ActionChip(
                   icon: Icons.download_outlined,
                   label: 'Download',
                   onTap: () {
-                    DownloadService.startDownload(widget.video);
-                    Navigator.push(context,
-                        FadeSlidePageRoute(page: const DownloadsScreen()));
+                    DownloadService.startDownload(_currentVideo);
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text('Downloading "${_currentVideo.title}" to Youtify storage...'),
+                        behavior: SnackBarBehavior.floating,
+                        action: SnackBarAction(
+                          label: 'View',
+                          onPressed: () => Navigator.push(
+                            context,
+                            FadeSlidePageRoute(page: const DownloadsScreen()),
+                          ),
+                        ),
+                      ),
+                    );
                   },
                 ),
                 const SizedBox(width: 8),
@@ -425,48 +575,119 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
   }
 
   Widget _buildChannelRow() {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final isSub = SubscriptionService.isSubscribed(_currentVideo.channelName);
+    final hasRealAvatar = _currentVideo.channelAvatarUrl.isNotEmpty &&
+        !_currentVideo.channelAvatarUrl.contains('ui-avatars.com');
+
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
       child: Row(
         children: [
-          CircleAvatar(
-            radius: 20,
-            backgroundImage: NetworkImage(widget.video.channelAvatarUrl),
-            onBackgroundImageError: (e, s) => {},
+          GestureDetector(
+            onTap: () {
+              Navigator.push(
+                context,
+                FadeSlidePageRoute(
+                  page: ChannelProfileScreen(channel: {
+                    'id': _currentVideo.channelId,
+                    'name': _currentVideo.channelName,
+                    'avatar': _currentVideo.channelAvatarUrl,
+                    'subs': _channelSubs ?? '',
+                  }),
+                ),
+              );
+            },
+            child: CircleAvatar(
+              radius: 20,
+              backgroundColor: isDark ? const Color(0xFF272727) : const Color(0xFFE0E0E0),
+              backgroundImage: hasRealAvatar ? NetworkImage(_currentVideo.channelAvatarUrl) : null,
+              child: !hasRealAvatar
+                  ? Text(
+                      _currentVideo.channelName.isNotEmpty
+                          ? _currentVideo.channelName[0].toUpperCase()
+                          : 'Y',
+                      style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white),
+                    )
+                  : null,
+            ),
           ),
           const SizedBox(width: 12),
           Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(widget.video.channelName,
-                    style: const TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.w600,
-                        fontSize: 15)),
-                Text('Live YouTube channel data',
-                    style: TextStyle(color: Colors.grey[500], fontSize: 12)),
-              ],
+            child: GestureDetector(
+              onTap: () {
+                Navigator.push(
+                  context,
+                  FadeSlidePageRoute(
+                    page: ChannelProfileScreen(channel: {
+                      'id': _currentVideo.channelId,
+                      'name': _currentVideo.channelName,
+                      'avatar': _currentVideo.channelAvatarUrl,
+                      'subs': _channelSubs ?? '',
+                    }),
+                  ),
+                );
+              },
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(_currentVideo.channelName,
+                      style: TextStyle(
+                          color: isDark ? Colors.white : Colors.black87,
+                          fontWeight: FontWeight.w600,
+                          fontSize: 15)),
+                  Text(
+                    _channelSubs != null && _channelSubs!.isNotEmpty
+                        ? '$_channelSubs subscribers'
+                        : 'View channel',
+                    style: TextStyle(color: Colors.grey[500], fontSize: 12),
+                  ),
+                ],
+              ),
             ),
           ),
-          GestureDetector(
-            onTap: () => setState(() => _isSubscribed = !_isSubscribed),
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 250),
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              decoration: BoxDecoration(
-                color: _isSubscribed ? const Color(0xFF272727) : Colors.white,
-                borderRadius: BorderRadius.circular(20),
-              ),
-              child: Text(
-                _isSubscribed ? 'Subscribed ✓' : 'Subscribe',
-                style: TextStyle(
-                  color: _isSubscribed ? Colors.white : Colors.black,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 13,
-                ),
-              ),
-            ),
+          AnimatedSwitcher(
+            duration: const Duration(milliseconds: 250),
+            child: isSub
+                ? OutlinedButton.icon(
+                    key: const ValueKey('subbed'),
+                    icon: const Icon(Icons.check, size: 14, color: Colors.grey),
+                    label: const Text('Subscribed', style: TextStyle(fontSize: 12, color: Colors.grey)),
+                    style: OutlinedButton.styleFrom(
+                      side: BorderSide(color: isDark ? Colors.white24 : Colors.black26),
+                      backgroundColor: isDark ? const Color(0xFF272727) : const Color(0xFFE5E5E5),
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                    ),
+                    onPressed: () async {
+                      await SubscriptionService.toggleSubscribe(SubscribedChannel(
+                        id: _currentVideo.channelId ?? '',
+                        name: _currentVideo.channelName,
+                        avatar: _currentVideo.channelAvatarUrl,
+                        subs: _channelSubs ?? '',
+                      ));
+                      if (mounted) setState(() {});
+                    },
+                  )
+                : ElevatedButton(
+                    key: const ValueKey('notsubbed'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.red,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                    ),
+                    onPressed: () async {
+                      await SubscriptionService.toggleSubscribe(SubscribedChannel(
+                        id: _currentVideo.channelId ?? '',
+                        name: _currentVideo.channelName,
+                        avatar: _currentVideo.channelAvatarUrl,
+                        subs: _channelSubs ?? '',
+                      ));
+                      if (mounted) setState(() {});
+                    },
+                    child: const Text('Subscribe', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                  ),
           ),
         ],
       ),
@@ -474,6 +695,12 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
   }
 
   Widget _buildDescription() {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final hasDesc = _currentVideo.description != null && _currentVideo.description!.trim().isNotEmpty;
+    final descText = hasDesc
+        ? _currentVideo.description!
+        : (_isLoadingDetails ? 'Loading description...' : 'No description provided.');
+
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
       child: GestureDetector(
@@ -481,7 +708,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
         child: Container(
           padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(
-            color: const Color(0xFF1A1A1A),
+            color: isDark ? const Color(0xFF1A1A1A) : const Color(0xFFF0F0F0),
             borderRadius: BorderRadius.circular(12),
           ),
           child: Column(
@@ -489,23 +716,29 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
             children: [
               Row(
                 children: [
-                  Text(widget.video.views,
-                      style: const TextStyle(
-                          color: Colors.white,
+                  Text(_currentVideo.views,
+                      style: TextStyle(
+                          color: isDark ? Colors.white : Colors.black87,
                           fontWeight: FontWeight.bold,
                           fontSize: 13)),
                   const SizedBox(width: 8),
-                  Text(widget.video.timestamp,
-                      style: const TextStyle(
-                          color: Colors.white,
+                  Text(_currentVideo.timestamp,
+                      style: TextStyle(
+                          color: isDark ? Colors.white : Colors.black87,
                           fontWeight: FontWeight.bold,
                           fontSize: 13)),
+                  const Spacer(),
+                  Text('more',
+                      style: TextStyle(
+                          color: isDark ? Colors.grey[400] : Colors.grey[600],
+                          fontWeight: FontWeight.w600,
+                          fontSize: 12)),
                 ],
               ),
               const SizedBox(height: 8),
-              Text(widget.video.description ?? 'No description provided.',
+              Text(descText,
                   style: TextStyle(
-                      color: Colors.grey[300], fontSize: 13, height: 1.5),
+                      color: isDark ? Colors.grey[300] : Colors.grey[800], fontSize: 13, height: 1.5),
                   maxLines: 3,
                   overflow: TextOverflow.ellipsis),
             ],
@@ -515,74 +748,6 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
     );
   }
 
-  void _showDescriptionSheet() {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: const Color(0xFF1A1A1A),
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (context) {
-        return DraggableScrollableSheet(
-          initialChildSize: 0.6,
-          minChildSize: 0.4,
-          maxChildSize: 0.9,
-          expand: false,
-          builder: (context, scrollController) {
-            return Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const SizedBox(height: 12),
-                Center(
-                  child: Container(
-                    width: 40,
-                    height: 4,
-                    decoration: BoxDecoration(
-                      color: Colors.grey[600],
-                      borderRadius: BorderRadius.circular(2),
-                    ),
-                  ),
-                ),
-                const Padding(
-                  padding: EdgeInsets.all(16.0),
-                  child: Text('Description',
-                      style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold)),
-                ),
-                const Divider(color: Color(0xFF272727), height: 1),
-                Expanded(
-                  child: ListView(
-                    controller: scrollController,
-                    padding: const EdgeInsets.all(16),
-                    children: [
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                        children: [
-                          _buildStatColumn(widget.video.likes ?? '0', 'Likes'),
-                          _buildStatColumn(widget.video.views, 'Views'),
-                          _buildStatColumn(widget.video.timestamp, 'Date'),
-                          _buildStatColumn(widget.video.duration, 'Duration'),
-                        ],
-                      ),
-                      const SizedBox(height: 24),
-                      Text(
-                        widget.video.description ?? 'No description provided.',
-                        style: const TextStyle(
-                            color: Colors.white, fontSize: 14, height: 1.5),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            );
-          },
-        );
-      },
-    );
-  }
 
   Widget _buildStatColumn(String value, String label) {
     return Column(
@@ -598,89 +763,134 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
     );
   }
 
-  Widget _buildComments() {
+  Widget _buildCommentsCapsule() {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final capsuleBg = isDark ? const Color(0xFF1E1E1E) : const Color(0xFFEBEBEB);
+    final textPrimary = isDark ? Colors.white : Colors.black87;
+    final textSecondary = isDark ? Colors.grey[400] : Colors.grey[700];
+
     return Padding(
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text('Comments (${_comments.length})',
-              style: const TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 15)),
-          const SizedBox(height: 16),
-          Row(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      child: GestureDetector(
+        onTap: _showCommentsSheet,
+        child: Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: capsuleBg,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: isDark ? Colors.white10 : Colors.black12),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const CircleAvatar(
-                  radius: 16,
-                  backgroundColor: Colors.red,
-                  child: Icon(Icons.person, color: Colors.white, size: 16)),
-              const SizedBox(width: 10),
-              Expanded(
-                child: TextField(
-                  controller: _commentController,
-                  style: const TextStyle(color: Colors.white, fontSize: 14),
-                  decoration: InputDecoration(
-                    hintText: 'Add a comment...',
-                    hintStyle: TextStyle(color: Colors.grey[600], fontSize: 14),
-                    border: const UnderlineInputBorder(
-                        borderSide: BorderSide(color: Color(0xFF272727))),
-                    focusedBorder: const UnderlineInputBorder(
-                        borderSide: BorderSide(color: Colors.red)),
-                    enabledBorder: const UnderlineInputBorder(
-                        borderSide: BorderSide(color: Color(0xFF272727))),
+              Row(
+                children: [
+                  Text(
+                    'Comments',
+                    style: TextStyle(
+                      color: textPrimary,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 13,
+                    ),
                   ),
-                  onSubmitted: (text) {
-                    if (text.trim().isEmpty) return;
-                    _submitComment(text.trim());
-                  },
-                ),
+                  const SizedBox(width: 6),
+                  Text(
+                    '${_comments.length}',
+                    style: TextStyle(color: textSecondary, fontSize: 13),
+                  ),
+                  const Spacer(),
+                  Icon(Icons.unfold_more, size: 18, color: textSecondary),
+                ],
               ),
+              const SizedBox(height: 8),
+              if (_isLoadingComments)
+                const SizedBox(
+                  height: 36,
+                  child: Center(
+                    child: SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.red),
+                    ),
+                  ),
+                )
+              else if (_comments.isEmpty)
+                Text(
+                  'Add a comment...',
+                  style: TextStyle(color: textSecondary, fontSize: 12),
+                )
+              else
+                SizedBox(
+                  height: 52,
+                  child: ListView.builder(
+                    physics: const BouncingScrollPhysics(),
+                    itemCount: _comments.length > 5 ? 5 : _comments.length,
+                    itemBuilder: (ctx, i) {
+                      final c = _comments[i];
+                      return Padding(
+                        padding: const EdgeInsets.only(bottom: 6),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            CircleAvatar(
+                              radius: 10,
+                              backgroundImage: NetworkImage(c['avatar'] ?? ''),
+                              backgroundColor: Colors.grey[800],
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                c['text'] ?? '',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(color: textPrimary, fontSize: 12),
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
+                ),
             ],
           ),
-          const SizedBox(height: 20),
-          if (_isLoadingComments)
-            const Center(child: CircularProgressIndicator(color: Colors.red))
-          else if (_comments.isEmpty)
-            const Center(
-                child: Padding(
-                    padding: EdgeInsets.all(16.0),
-                    child: Text("No comments available",
-                        style: TextStyle(color: Colors.grey))))
-          else
-            ..._comments.map((c) => _buildCommentTile(c)),
-        ],
+        ),
       ),
     );
   }
 
+
   Widget _buildCommentTile(Map<String, String> c) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Padding(
       padding: const EdgeInsets.only(bottom: 16),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          CircleAvatar(radius: 16, backgroundImage: NetworkImage(c['avatar']!)),
+          CircleAvatar(
+            radius: 16,
+            backgroundImage: NetworkImage(c['avatar'] ?? ''),
+            backgroundColor: Colors.grey[800],
+          ),
           const SizedBox(width: 10),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Row(children: [
-                  Text(c['user']!,
-                      style: const TextStyle(
-                          color: Colors.white,
+                  Text(c['user'] ?? 'User',
+                      style: TextStyle(
+                          color: isDark ? Colors.white : Colors.black87,
                           fontSize: 13,
                           fontWeight: FontWeight.w600)),
                   const SizedBox(width: 8),
-                  Text(c['time']!,
+                  Text(c['time'] ?? '',
                       style: TextStyle(color: Colors.grey[500], fontSize: 12)),
                 ]),
                 const SizedBox(height: 4),
-                Text(c['text']!,
-                    style: const TextStyle(
-                        color: Colors.white70, fontSize: 13, height: 1.4)),
+                Text(c['text'] ?? '',
+                    style: TextStyle(
+                        color: isDark ? Colors.white70 : Colors.black87, fontSize: 13, height: 1.4)),
               ],
             ),
           ),
@@ -689,92 +899,506 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
     );
   }
 
-  void _showSettingsSheet() {
-    showCapsuleModal(
-      context: context,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(0, 8, 0, 32),
+  Widget _buildRelatedVideos() {
+    if (_isLoadingRelated) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 12.0),
         child: Column(
-          mainAxisSize: MainAxisSize.min,
+          children: const [
+            CompactVideoSkeleton(),
+            CompactVideoSkeleton(),
+          ],
+        ),
+      );
+    }
+    if (_relatedVideos.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+          child: Text(
+            'Recommended Videos',
+            style: TextStyle(
+              color: isDark ? Colors.white : Colors.black87,
+              fontSize: 16,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+        ),
+        ..._relatedVideos.map((v) => VideoCard(
+          video: v,
+          animationIndex: 0,
+          onShare: () => _openPopup(VideoPlayerPopup.share),
+        )),
+      ],
+    );
+  }
+
+  Widget _buildInScreenPopupPanel() {
+    if (_activePopup == null) return const SizedBox.shrink();
+
+    String title;
+    Widget content;
+
+    switch (_activePopup!) {
+      case VideoPlayerPopup.description:
+        title = 'Description';
+        content = _buildDescriptionPopupContent();
+        break;
+      case VideoPlayerPopup.comments:
+        title = 'Comments (${_comments.length})';
+        content = _buildCommentsPopupContent();
+        break;
+      case VideoPlayerPopup.quality:
+        title = 'Video Quality';
+        content = _buildQualityPopupContent();
+        break;
+      case VideoPlayerPopup.settings:
+        title = 'Settings';
+        content = _buildSettingsPopupContent();
+        break;
+      case VideoPlayerPopup.speed:
+        title = 'Playback Speed';
+        content = _buildSpeedPopupContent();
+        break;
+      case VideoPlayerPopup.share:
+        title = 'Share';
+        content = _buildSharePopupContent();
+        break;
+    }
+
+    final screenHeight = MediaQuery.of(context).size.height;
+    final maxHeight = screenHeight * 0.70;
+
+    return Positioned.fill(
+      child: PopScope(
+        canPop: false,
+        onPopInvoked: (didPop) {
+          if (!didPop) _closePopup();
+        },
+        child: Stack(
           children: [
-            const Padding(
-                padding: EdgeInsets.fromLTRB(20, 0, 20, 12),
-                child: Align(
-                    alignment: Alignment.centerLeft,
-                    child: Text('Settings',
-                        style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold)))),
-            const Divider(color: Color(0xFF272727), height: 1),
-            StatefulBuilder(builder: (context, setSheetState) {
-              return SwitchListTile(
-                title: const Text('Audio Only Stream',
-                    style: TextStyle(color: Colors.white, fontSize: 14)),
-                secondary: const Icon(Icons.audiotrack, color: Colors.white),
-                value: _isAudioOnly,
-                activeColor: Colors.red,
-                onChanged: (val) {
-                  setSheetState(() => _isAudioOnly = val);
-                  _toggleAudioOnly(val);
-                },
-              );
-            }),
-            _SettingsTile(
-                icon: Icons.hd_outlined,
-                title: 'Quality',
-                subtitle: 'Auto (1080p)'),
-            _SettingsTile(
-                icon: Icons.speed, title: 'Playback speed', subtitle: 'Normal'),
-            _SettingsTile(
-                icon: Icons.closed_caption_outlined,
-                title: 'Captions',
-                subtitle: 'English'),
-            _SettingsTile(
-                icon: Icons.audiotrack_outlined,
-                title: 'Audio track',
-                subtitle: 'Original'),
-            _SettingsTile(
-                icon: Icons.lock_outline, title: 'Lock screen', subtitle: ''),
-            _SettingsTile(
-                icon: Icons.settings_outlined,
-                title: 'More',
-                subtitle: 'Advanced settings'),
-            const SizedBox(height: 8),
+            FadeTransition(
+              opacity: _popupFadeAnim,
+              child: GestureDetector(
+                onTap: _closePopup,
+                child: Container(
+                  color: Colors.black.withOpacity(0.65),
+                ),
+              ),
+            ),
+            Align(
+              alignment: Alignment.bottomCenter,
+              child: SlideTransition(
+                position: _popupSlideAnim,
+                child: GestureDetector(
+                  onVerticalDragEnd: (details) {
+                    if (details.primaryVelocity != null && details.primaryVelocity! > 250) {
+                      _closePopup();
+                    }
+                  },
+                  child: Container(
+                    height: maxHeight,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF1E1E1E),
+                      borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+                      border: Border.all(color: Colors.white.withOpacity(0.08), width: 1),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(0.7),
+                          blurRadius: 24,
+                          offset: const Offset(0, -4),
+                        ),
+                      ],
+                    ),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const SizedBox(height: 10),
+                        Center(
+                          child: Container(
+                            width: 40,
+                            height: 4,
+                            decoration: BoxDecoration(
+                              color: Colors.grey[600],
+                              borderRadius: BorderRadius.circular(2),
+                            ),
+                          ),
+                        ),
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Text(
+                                title,
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 17,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                              IconButton(
+                                icon: const Icon(Icons.close, color: Colors.white, size: 22),
+                                onPressed: _closePopup,
+                                splashRadius: 20,
+                              ),
+                            ],
+                          ),
+                        ),
+                        const Divider(color: Color(0xFF2E2E2E), height: 1),
+                        Expanded(child: content),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
           ],
         ),
       ),
     );
   }
 
-  void _showQualitySheet() {
-    showCapsuleModal(
-      context: context,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(0, 8, 0, 32),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
+  Widget _buildDescriptionPopupContent() {
+    final hasDesc = _currentVideo.description != null && _currentVideo.description!.trim().isNotEmpty;
+    return ListView(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      children: [
+        Text(
+          _currentVideo.title,
+          style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold, height: 1.3),
+        ),
+        const SizedBox(height: 12),
+        Row(
           children: [
-            const Padding(
-                padding: EdgeInsets.fromLTRB(20, 0, 20, 12),
-                child: Align(
-                    alignment: Alignment.centerLeft,
-                    child: Text('Video Quality',
-                        style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold)))),
-            const Divider(color: Color(0xFF272727), height: 1),
-            ...['Auto', '360p', '720p', '1080p'].map((q) => ListTile(
-                  title: Text(q, style: const TextStyle(color: Colors.white)),
-                  trailing: q == 'Auto'
-                      ? const Icon(Icons.check, color: Colors.red)
-                      : null,
-                  onTap: () => Navigator.pop(context),
-                )),
-            const SizedBox(height: 8),
+            CircleAvatar(
+              radius: 16,
+              backgroundColor: const Color(0xFF2E2E2E),
+              backgroundImage: (_currentVideo.channelAvatarUrl.isNotEmpty && !_currentVideo.channelAvatarUrl.contains('ui-avatars.com'))
+                  ? NetworkImage(_currentVideo.channelAvatarUrl)
+                  : null,
+              child: (_currentVideo.channelAvatarUrl.isEmpty || _currentVideo.channelAvatarUrl.contains('ui-avatars.com'))
+                  ? Text(_currentVideo.channelName.isNotEmpty ? _currentVideo.channelName[0].toUpperCase() : 'Y',
+                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12))
+                  : null,
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(_currentVideo.channelName,
+                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 14)),
+                  if (_channelSubs != null && _channelSubs!.isNotEmpty)
+                    Text('$_channelSubs subscribers',
+                        style: TextStyle(color: Colors.grey[400], fontSize: 12)),
+                ],
+              ),
+            ),
           ],
         ),
+        const SizedBox(height: 16),
+        Container(
+          padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+          decoration: BoxDecoration(
+            color: const Color(0xFF282828),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceAround,
+            children: [
+              _buildStatColumn(_currentVideo.likes ?? '0', 'Likes'),
+              Container(width: 1, height: 28, color: Colors.white12),
+              _buildStatColumn(_currentVideo.views, 'Views'),
+              Container(width: 1, height: 28, color: Colors.white12),
+              _buildStatColumn(_currentVideo.timestamp, 'Uploaded'),
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
+        const Text(
+          'Description',
+          style: TextStyle(color: Colors.grey, fontSize: 13, fontWeight: FontWeight.w600),
+        ),
+        const SizedBox(height: 8),
+        SelectableText(
+          hasDesc ? _currentVideo.description! : (_isLoadingDetails ? 'Loading real description...' : 'No description provided.'),
+          style: const TextStyle(color: Colors.white70, fontSize: 14, height: 1.6),
+        ),
+        const SizedBox(height: 24),
+      ],
+    );
+  }
+
+  Widget _buildCommentsPopupContent() {
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+          child: Row(
+            children: [
+              CircleAvatar(
+                radius: 16,
+                backgroundImage: NetworkImage(UserDataService.profilePhotoUrl),
+                backgroundColor: Colors.grey[800],
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF282828),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: TextField(
+                    controller: _commentController,
+                    style: const TextStyle(color: Colors.white, fontSize: 14),
+                    decoration: InputDecoration(
+                      hintText: 'Add a comment...',
+                      hintStyle: TextStyle(color: Colors.grey[500], fontSize: 13),
+                      border: InputBorder.none,
+                      isDense: true,
+                      contentPadding: const EdgeInsets.symmetric(vertical: 10),
+                    ),
+                    onSubmitted: (text) {
+                      if (text.trim().isEmpty) return;
+                      _submitComment(text.trim());
+                    },
+                  ),
+                ),
+              ),
+              IconButton(
+                icon: const Icon(Icons.send, color: Colors.red, size: 20),
+                onPressed: () {
+                  if (_commentController.text.trim().isNotEmpty) {
+                    _submitComment(_commentController.text.trim());
+                  }
+                },
+              ),
+            ],
+          ),
+        ),
+        const Divider(color: Color(0xFF2E2E2E), height: 1),
+        Expanded(
+          child: _isLoadingComments
+              ? const Center(child: CircularProgressIndicator(color: Colors.red, strokeWidth: 2))
+              : _comments.isEmpty
+                  ? Center(
+                      child: Text('No comments yet. Be the first to comment!', style: TextStyle(color: Colors.grey[500])),
+                    )
+                  : ListView.builder(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                      itemCount: _comments.length,
+                      itemBuilder: (ctx, i) => _buildCommentTile(_comments[i]),
+                    ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildQualityPopupContent() {
+    final qualities = ['Auto (1080p)', '1080p', '720p', '480p', '360p', '240p'];
+    return ListView(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      children: [
+        for (final q in qualities)
+          ListTile(
+            title: Text(q, style: TextStyle(
+              color: _selectedQuality == q ? Colors.red : Colors.white,
+              fontWeight: _selectedQuality == q ? FontWeight.bold : FontWeight.normal,
+            )),
+            trailing: _selectedQuality == q
+                ? const Icon(Icons.check, color: Colors.red, size: 20)
+                : null,
+            onTap: () {
+              setState(() => _selectedQuality = q);
+              _closePopup();
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text('Quality set to $q'), behavior: SnackBarBehavior.floating, duration: const Duration(seconds: 1)),
+              );
+            },
+          ),
+      ],
+    );
+  }
+
+  Widget _buildSpeedPopupContent() {
+    final speeds = [0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0];
+    return ListView(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      children: [
+        for (final speed in speeds)
+          ListTile(
+            title: Text(speed == 1.0 ? 'Normal' : '${speed}x', style: TextStyle(
+              color: _playbackSpeed == speed ? Colors.red : Colors.white,
+              fontWeight: _playbackSpeed == speed ? FontWeight.bold : FontWeight.normal,
+            )),
+            trailing: _playbackSpeed == speed
+                ? const Icon(Icons.check, color: Colors.red, size: 20)
+                : null,
+            onTap: () {
+              setState(() => _playbackSpeed = speed);
+              _videoPlayerController?.setPlaybackSpeed(speed);
+              _closePopup();
+            },
+          ),
+      ],
+    );
+  }
+
+  Widget _buildSettingsPopupContent() {
+    return ListView(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      children: [
+        StatefulBuilder(builder: (context, setSheetState) {
+          return SwitchListTile(
+            title: const Text('Audio Only Stream', style: TextStyle(color: Colors.white, fontSize: 14)),
+            secondary: const Icon(Icons.audiotrack, color: Colors.white),
+            value: _isAudioOnly,
+            activeColor: Colors.red,
+            onChanged: (val) {
+              setSheetState(() => _isAudioOnly = val);
+              setState(() => _isAudioOnly = val);
+              _toggleAudioOnly(val);
+            },
+          );
+        }),
+        _SettingsTile(
+          icon: Icons.hd_outlined,
+          title: 'Quality',
+          subtitle: _selectedQuality,
+          onTap: () => _openPopup(VideoPlayerPopup.quality),
+        ),
+        _SettingsTile(
+          icon: Icons.speed,
+          title: 'Playback speed',
+          subtitle: _playbackSpeed == 1.0 ? 'Normal' : '${_playbackSpeed}x',
+          onTap: () => _openPopup(VideoPlayerPopup.speed),
+        ),
+        const _SettingsTile(
+          icon: Icons.closed_caption_outlined,
+          title: 'Captions',
+          subtitle: 'English',
+        ),
+        const _SettingsTile(
+          icon: Icons.audiotrack_outlined,
+          title: 'Audio track',
+          subtitle: 'Original',
+        ),
+        const _SettingsTile(
+          icon: Icons.lock_outline,
+          title: 'Lock screen',
+          subtitle: '',
+        ),
+      ],
+    );
+  }
+
+  Widget _buildSharePopupContent() {
+    final shareUrl = YouTubeService.shareUrl(_currentVideo.id);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.07),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    shareUrl,
+                    style: TextStyle(color: Colors.blue[300], fontSize: 13),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                GestureDetector(
+                  onTap: () {
+                    Clipboard.setData(ClipboardData(text: shareUrl));
+                    _closePopup();
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: const Text('Link copied! 🔗'),
+                        backgroundColor: const Color(0xFF1A1A1A),
+                        behavior: SnackBarBehavior.floating,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      ),
+                    );
+                  },
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: Colors.red,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: const Text('Copy', style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold)),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 20),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceAround,
+            children: [
+              _SharePopupBtn(
+                icon: Icons.copy,
+                label: 'Copy Link',
+                onTap: () {
+                  Clipboard.setData(ClipboardData(text: shareUrl));
+                  _closePopup();
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: const Text('Link copied! 🔗'),
+                      backgroundColor: const Color(0xFF1A1A1A),
+                      behavior: SnackBarBehavior.floating,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    ),
+                  );
+                },
+              ),
+              _SharePopupBtn(
+                icon: Icons.chat_bubble_outline,
+                label: 'WhatsApp',
+                onTap: () async {
+                  _closePopup();
+                  final uri = Uri.parse('whatsapp://send?text=${Uri.encodeComponent(shareUrl)}');
+                  if (await canLaunchUrl(uri)) launchUrl(uri);
+                },
+              ),
+              _SharePopupBtn(
+                icon: Icons.send,
+                label: 'Telegram',
+                onTap: () async {
+                  _closePopup();
+                  final uri = Uri.parse('https://t.me/share/url?url=${Uri.encodeComponent(shareUrl)}');
+                  if (await canLaunchUrl(uri)) launchUrl(uri, mode: LaunchMode.externalApplication);
+                },
+              ),
+              _SharePopupBtn(
+                icon: Icons.more_horiz,
+                label: 'More',
+                onTap: () {
+                  _closePopup();
+                },
+              ),
+            ],
+          ),
+        ],
       ),
     );
   }
@@ -784,9 +1408,10 @@ class _SettingsTile extends StatelessWidget {
   final IconData icon;
   final String title;
   final String subtitle;
+  final VoidCallback? onTap;
 
   const _SettingsTile(
-      {required this.icon, required this.title, required this.subtitle});
+      {required this.icon, required this.title, required this.subtitle, this.onTap});
 
   @override
   Widget build(BuildContext context) {
@@ -798,7 +1423,45 @@ class _SettingsTile extends StatelessWidget {
           ? Text(subtitle,
               style: const TextStyle(color: Colors.grey, fontSize: 13))
           : null,
-      onTap: () => Navigator.pop(context),
+      onTap: onTap ?? () => Navigator.pop(context),
+    );
+  }
+}
+
+class _SharePopupBtn extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+
+  const _SharePopupBtn({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 50,
+            height: 50,
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.08),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(icon, color: Colors.white, size: 22),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            label,
+            style: const TextStyle(color: Colors.white70, fontSize: 11),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -992,9 +1655,14 @@ class _CustomVideoPlayerState extends State<CustomVideoPlayer>
                         child: Row(
                           children: [
                             _ControlBtn(
+                                icon: Icons.arrow_back,
+                                onTap: widget.onClose,
+                                tooltip: 'Close video'),
+                            const SizedBox(width: 4),
+                            _ControlBtn(
                                 icon: Icons.keyboard_arrow_down,
-                                onTap: widget.onMinimize,
-                                tooltip: 'Minimize'),
+                                onTap: widget.onClose,
+                                tooltip: 'Close video'),
                             const Spacer(),
                             _ControlBtn(
                                 icon: Icons.fullscreen,
@@ -1057,13 +1725,21 @@ class _CustomVideoPlayerState extends State<CustomVideoPlayer>
                                     shape: BoxShape.circle,
                                     color: Colors.black54),
                                 padding: const EdgeInsets.all(12),
-                                child: Icon(
-                                  value.isPlaying
-                                      ? Icons.pause
-                                      : Icons.play_arrow,
-                                  color: Colors.white,
-                                  size: 48,
-                                ),
+                                child: value.isPlaying
+                                    ? const Icon(
+                                        Icons.pause,
+                                        color: Colors.white,
+                                        size: 48,
+                                      )
+                                    : ClipRRect(
+                                        borderRadius: BorderRadius.circular(10),
+                                        child: Image.asset(
+                                          'assets/images/app_icon.png',
+                                          width: 48,
+                                          height: 48,
+                                          fit: BoxFit.contain,
+                                        ),
+                                      ),
                               ),
                             );
                           },

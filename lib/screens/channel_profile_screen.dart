@@ -2,6 +2,7 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 import '../models/video.dart';
 import '../widgets/video_card.dart';
+import '../widgets/skeleton_loader.dart';
 import '../widgets/capsule_modal.dart';
 import '../utils/page_transitions.dart';
 import 'video_player_screen.dart';
@@ -35,19 +36,31 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen>
   bool _isLoadingMore = false;
   final _videosController = ScrollController();
 
-  String get _name => widget.channel['name'] as String? ?? 'Channel';
+  Map<String, dynamic> _channelDetails = {};
+
+  String get _name =>
+      _channelDetails['name'] as String? ??
+      widget.channel['name'] as String? ??
+      'Channel';
   String get _avatar =>
+      _channelDetails['avatar'] as String? ??
       widget.channel['avatar'] as String? ??
       'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?q=80&w=200';
-  String get _subs => widget.channel['subs'] as String? ?? '0';
-  String get _watchTime => widget.channel['watchTime'] as String? ?? '0m';
+  String get _subs =>
+      _channelDetails['subs'] as String? ?? widget.channel['subs'] as String? ?? '';
+  String get _watchTime =>
+      _channelDetails['watchTime'] as String? ?? widget.channel['watchTime'] as String? ?? '';
   String get _banner =>
+      _channelDetails['banner'] as String? ??
       widget.channel['banner'] as String? ??
       'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?q=80&w=1200&auto=format&fit=crop';
   String get _channelId => widget.channel['id'] as String? ?? '';
-  String get _description => widget.channel['description'] as String? ?? '';
-  String get _videoCount => widget.channel['videoCount'] as String? ?? '0';
-  String get _viewCount => widget.channel['viewCount'] as String? ?? '0';
+  String get _description =>
+      _channelDetails['description'] as String? ?? widget.channel['description'] as String? ?? '';
+  String get _videoCount =>
+      _channelDetails['videoCount'] as String? ?? widget.channel['videoCount'] as String? ?? '';
+  String get _viewCount =>
+      _channelDetails['viewCount'] as String? ?? widget.channel['viewCount'] as String? ?? '';
 
   @override
   void initState() {
@@ -61,8 +74,21 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen>
             CurvedAnimation(parent: _entryCtrl, curve: Curves.easeOutCubic));
     _tabCtrl = TabController(length: 3, vsync: this);
     _videosController.addListener(_onVideosScroll);
+    _loadChannelDetails();
     _loadChannelVideos();
   }
+
+  Future<void> _loadChannelDetails() async {
+    if (_channelId.isNotEmpty) {
+      final details = await YouTubeService.fetchChannel(_channelId);
+      if (details != null && mounted) {
+        setState(() {
+          _channelDetails = details;
+        });
+      }
+    }
+  }
+
 
   void _onVideosScroll() {
     if (_videosController.position.pixels >=
@@ -308,10 +334,29 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen>
                               blurRadius: 12)
                         ],
                       ),
-                      child: CircleAvatar(
-                        radius: 36,
-                        backgroundImage: NetworkImage(_avatar),
-                        onBackgroundImageError: (e, s) => {},
+                      child: ClipOval(
+                        child: Container(
+                          width: 72,
+                          height: 72,
+                          color: const Color(0xFF272727),
+                          child: Image.network(
+                            _avatar,
+                            width: 72,
+                            height: 72,
+                            fit: BoxFit.cover,
+                            errorBuilder: (_, __, ___) => Container(
+                              color: const Color(0xFFE50914),
+                              alignment: Alignment.center,
+                              child: Text(
+                                _name.isNotEmpty ? _name[0].toUpperCase() : 'Y',
+                                style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 28,
+                                    fontWeight: FontWeight.bold),
+                              ),
+                            ),
+                          ),
+                        ),
                       ),
                     ),
                     const SizedBox(width: 14),
@@ -463,7 +508,11 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen>
 
   Widget _buildVideosTab() {
     if (_isLoadingVideos) {
-      return const Center(child: CircularProgressIndicator(color: Colors.red));
+      return ListView.builder(
+        itemCount: 4,
+        padding: const EdgeInsets.only(top: 8, bottom: 120),
+        itemBuilder: (_, __) => const CompactVideoSkeleton(),
+      );
     }
     return ListView.builder(
       controller: _videosController,
@@ -472,9 +521,8 @@ class _ChannelProfileScreenState extends State<ChannelProfileScreen>
       itemBuilder: (ctx, i) {
         if (i == _channelVideos.length) {
           return const Padding(
-              padding: EdgeInsets.all(20),
-              child:
-                  Center(child: CircularProgressIndicator(color: Colors.red)));
+              padding: EdgeInsets.symmetric(vertical: 12),
+              child: CompactVideoSkeleton());
         }
         final v = _channelVideos[i];
         return _ChannelVideoTile(

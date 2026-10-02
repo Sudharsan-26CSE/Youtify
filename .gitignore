@@ -29,7 +29,13 @@ migrate_working_dir/
 .flutter-plugins-dependencies
 .pub-cache/
 .pub/
-/build/
+build/
+**/build/
+.gradle/
+**/.gradle/
+android/.gradle/
+android/build/
+android/app/build/
 
 # Symbolication related
 app.*.symbols

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../services/auth_service.dart';
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
@@ -34,7 +35,13 @@ class _SplashScreenState extends State<SplashScreen>
     _ctrl.forward().then((_) async {
       await Future.delayed(const Duration(milliseconds: 800));
       if (!mounted) return;
-      Navigator.of(context).pushReplacementNamed('/login');
+      final loggedIn = await AuthService.isUserLoggedIn();
+      if (!mounted) return;
+      if (loggedIn) {
+        Navigator.of(context).pushReplacementNamed('/home');
+      } else {
+        Navigator.of(context).pushReplacementNamed('/login');
+      }
     });
   }
 

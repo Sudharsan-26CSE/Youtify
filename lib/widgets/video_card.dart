@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import '../models/video.dart';
-import '../screens/video_player_screen.dart';
 import '../screens/downloads_screen.dart';
+import '../screens/channel_profile_screen.dart';
 import '../services/youtube_service.dart';
 import '../services/download_service.dart';
 import '../utils/page_transitions.dart';
@@ -30,10 +30,22 @@ class _VideoCardState extends State<VideoCard>
   late Animation<double> _entryFade;
   late Animation<Offset> _entrySlide;
   bool _isPressed = false;
+  String _avatarUrl = '';
 
   @override
   void initState() {
     super.initState();
+    _avatarUrl = widget.video.channelAvatarUrl;
+    DownloadService.addListener(_onDownloadUpdated);
+
+    if (widget.video.channelId != null && widget.video.channelId!.isNotEmpty) {
+      YouTubeService.getChannelAvatar(widget.video.channelId!).then((url) {
+        if (mounted && url.isNotEmpty && url != _avatarUrl) {
+          setState(() => _avatarUrl = url);
+        }
+      });
+    }
+
     _entryCtrl = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 500),
@@ -51,8 +63,13 @@ class _VideoCardState extends State<VideoCard>
     });
   }
 
+  void _onDownloadUpdated() {
+    if (mounted) setState(() {});
+  }
+
   @override
   void dispose() {
+    DownloadService.removeListener(_onDownloadUpdated);
     _entryCtrl.dispose();
     super.dispose();
   }
@@ -62,8 +79,104 @@ class _VideoCardState extends State<VideoCard>
     isPlayerExpanded.value = true;
   }
 
+  void _openChannelProfile() {
+    Navigator.push(
+      context,
+      SlideRightPageRoute(
+        page: ChannelProfileScreen(
+          channel: {
+            'id': widget.video.channelId ?? '',
+            'name': widget.video.channelName,
+            'avatar': _avatarUrl.isNotEmpty ? _avatarUrl : widget.video.channelAvatarUrl,
+            'subs': '',
+            'banner': '',
+          },
+        ),
+      ),
+    );
+  }
+
+  void _handleDownload() {
+    if (DownloadService.isDownloading(widget.video.id)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Download already in progress...'),
+          duration: Duration(seconds: 2),
+        ),
+      );
+      return;
+    }
+
+    if (DownloadService.isDownloaded(widget.video.id)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('Saved in Youtify folder!'),
+          action: SnackBarAction(
+            label: 'View',
+            textColor: Colors.red,
+            onPressed: () {
+              Navigator.push(context, FadeSlidePageRoute(page: const DownloadsScreen()));
+            },
+          ),
+          duration: const Duration(seconds: 3),
+        ),
+      );
+      return;
+    }
+
+    DownloadService.startDownload(widget.video);
+    setState(() {});
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Downloading "${widget.video.title}" to Youtify folder...'),
+        backgroundColor: const Color(0xFF212121),
+        action: SnackBarAction(
+          label: 'View',
+          textColor: Colors.red,
+          onPressed: () {
+            Navigator.push(context, FadeSlidePageRoute(page: const DownloadsScreen()));
+          },
+        ),
+        duration: const Duration(seconds: 3),
+      ),
+    );
+  }
+
+  Widget _buildDownloadButton() {
+    final isDownloading = DownloadService.isDownloading(widget.video.id);
+    final isDownloaded = DownloadService.isDownloaded(widget.video.id);
+
+    if (isDownloading) {
+      return Container(
+        width: 38,
+        height: 38,
+        padding: const EdgeInsets.all(9),
+        child: const CircularProgressIndicator(
+          strokeWidth: 2,
+          color: Colors.red,
+        ),
+      );
+    }
+
+    return IconButton(
+      icon: Icon(
+        isDownloaded ? Icons.download_done_rounded : Icons.download_for_offline_outlined,
+        color: isDownloaded ? Colors.red : Colors.grey[400],
+        size: 22,
+      ),
+      tooltip: isDownloaded ? 'Downloaded to Youtify' : 'Download video',
+      onPressed: _handleDownload,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final titleColor = isDark ? Colors.white : const Color(0xFF0F0F0F);
+    final subtitleColor = isDark ? Colors.grey[400] : const Color(0xFF606060);
+    final iconColor = isDark ? Colors.grey[400] : Colors.grey[600];
+
     return FadeTransition(
       opacity: _entryFade,
       child: SlideTransition(
@@ -173,7 +286,7 @@ class _VideoCardState extends State<VideoCard>
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       GestureDetector(
-                        onTap: () {},
+                        onTap: _openChannelProfile,
                         child: Container(
                           width: 40,
                           height: 40,
@@ -183,7 +296,7 @@ class _VideoCardState extends State<VideoCard>
                           ),
                           child: ClipOval(
                             child: Image.network(
-                              widget.video.channelAvatarUrl,
+                              _avatarUrl.isNotEmpty ? _avatarUrl : widget.video.channelAvatarUrl,
                               fit: BoxFit.cover,
                               errorBuilder: (context, error, stackTrace) =>
                                   const Icon(Icons.person, color: Colors.white, size: 24),
@@ -200,25 +313,29 @@ class _VideoCardState extends State<VideoCard>
                               widget.video.title,
                               maxLines: 2,
                               overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                color: Colors.white,
+                              style: TextStyle(
+                                color: titleColor,
                                 fontSize: 15,
                                 fontWeight: FontWeight.w500,
                                 height: 1.3,
                               ),
                             ),
                             const SizedBox(height: 4),
-                            Text(
-                              '${widget.video.channelName} • ${widget.video.views} • ${widget.video.timestamp}',
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(color: Colors.grey[400], fontSize: 13),
+                            GestureDetector(
+                              onTap: _openChannelProfile,
+                              child: Text(
+                                '${widget.video.channelName} • ${widget.video.views} • ${widget.video.timestamp}',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(color: subtitleColor, fontSize: 13),
+                              ),
                             ),
                           ],
                         ),
                       ),
+                      _buildDownloadButton(),
                       IconButton(
-                        icon: Icon(Icons.more_vert, color: Colors.grey[400], size: 20),
+                        icon: Icon(Icons.more_vert, color: iconColor, size: 20),
                         onPressed: () => _showOptionsSheet(),
                       ),
                     ],
@@ -233,10 +350,15 @@ class _VideoCardState extends State<VideoCard>
     );
   }
 
+
   void _showPreviewSheet() {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final sheetBg = isDark ? const Color(0xFF1E1E1E) : Colors.white;
+    final txtColor = isDark ? Colors.white : Colors.black87;
+
     showModalBottomSheet(
       context: context,
-      backgroundColor: const Color(0xFF1A1A1A),
+      backgroundColor: sheetBg,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
@@ -265,7 +387,7 @@ class _VideoCardState extends State<VideoCard>
                   child: Text(
                     widget.video.title,
                     maxLines: 2,
-                    style: const TextStyle(color: Colors.white, fontSize: 13),
+                    style: TextStyle(color: txtColor, fontSize: 13, fontWeight: FontWeight.w600),
                   ),
                 ),
               ],
@@ -273,19 +395,22 @@ class _VideoCardState extends State<VideoCard>
           ),
           const SizedBox(height: 8),
           ListTile(
-            leading: const Icon(Icons.play_circle_outline, color: Colors.white),
-            title: const Text('Play video', style: TextStyle(color: Colors.white)),
+            leading: Icon(Icons.play_circle_outline, color: txtColor),
+            title: Text('Play video', style: TextStyle(color: txtColor)),
             onTap: () { Navigator.pop(ctx); _openVideo(); },
           ),
           ListTile(
-            leading: const Icon(Icons.watch_later_outlined, color: Colors.white),
-            title: const Text('Save to Watch Later', style: TextStyle(color: Colors.white)),
+            leading: Icon(Icons.watch_later_outlined, color: txtColor),
+            title: Text('Save to Watch Later', style: TextStyle(color: txtColor)),
             onTap: () => Navigator.pop(ctx),
           ),
           ListTile(
-            leading: const Icon(Icons.download_outlined, color: Colors.white),
-            title: const Text('Download', style: TextStyle(color: Colors.white)),
-            onTap: () => Navigator.pop(ctx),
+            leading: Icon(Icons.download_outlined, color: txtColor),
+            title: Text('Download', style: TextStyle(color: txtColor)),
+            onTap: () {
+              Navigator.pop(ctx);
+              _handleDownload();
+            },
           ),
           const SizedBox(height: 16),
         ],

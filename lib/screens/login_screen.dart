@@ -107,6 +107,7 @@ class _LoginScreenState extends State<LoginScreen>
         }
         await AuthService.signUpWithEmail(email, password, name);
       }
+      await AuthService.markUserLoggedIn(email);
       if (!mounted) return;
       await _showPreferencesDialog();
       if (mounted) Navigator.of(context).pushReplacementNamed('/home');
@@ -128,6 +129,10 @@ class _LoginScreenState extends State<LoginScreen>
   }
 
   Future<void> _showPreferencesDialog() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (prefs.containsKey('user_category')) {
+      return;
+    }
     String category = 'Technology';
     String age = '18-24';
     String language = 'English';
@@ -213,6 +218,7 @@ class _LoginScreenState extends State<LoginScreen>
         setState(() => _isLoading = false);
         return;
       }
+      await AuthService.markUserLoggedIn(cred.user?.email);
       if (!mounted) return;
       await _showPreferencesDialog();
       if (mounted) Navigator.of(context).pushReplacementNamed('/home');
@@ -430,21 +436,14 @@ class _LoginScreenState extends State<LoginScreen>
                     Row(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        Container(
-                          padding: const EdgeInsets.all(10),
-                          decoration: BoxDecoration(
-                            color: Colors.red,
-                            borderRadius: BorderRadius.circular(12),
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.red.withOpacity(0.5),
-                                blurRadius: 20,
-                                spreadRadius: 2,
-                              ),
-                            ],
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(12),
+                          child: Image.asset(
+                            'assets/images/app_icon.png',
+                            width: 48,
+                            height: 48,
+                            fit: BoxFit.contain,
                           ),
-                          child: const Icon(Icons.play_arrow,
-                              color: Colors.white, size: 32),
                         ),
                         const SizedBox(width: 12),
                         const Text(

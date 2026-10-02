@@ -1,5 +1,5 @@
 import 'dart:io';
-import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:convert';
 import 'package:dio/dio.dart';
@@ -90,6 +90,7 @@ class DownloadService {
   static bool _initialized = false;
 
   static List<DownloadItem> get downloads => List.unmodifiable(_downloads);
+  static List<DownloadItem> get items => downloads;
 
   static void addListener(void Function() listener) => _listeners.add(listener);
   static void removeListener(void Function() listener) => _listeners.remove(listener);
@@ -101,17 +102,23 @@ class DownloadService {
 
   static Future<void> init() async {
     if (_initialized) return;
-    const androidInit = AndroidInitializationSettings('@mipmap/ic_launcher');
-    const initSettings = InitializationSettings(android: androidInit);
-    await _notificationsPlugin.initialize(
-      initSettings,
-      onDidReceiveNotificationResponse: (details) {
-        if (details.payload != null && details.payload!.startsWith('undo_')) {
-          final videoId = details.payload!.replaceFirst('undo_', '');
-          removeDownload(videoId);
-        }
-      },
-    );
+    try {
+      if (!kIsWeb && Platform.isAndroid) {
+        const androidInit = AndroidInitializationSettings('@mipmap/ic_launcher');
+        const initSettings = InitializationSettings(android: androidInit);
+        await _notificationsPlugin.initialize(
+          settings: initSettings,
+          onDidReceiveNotificationResponse: (details) {
+            if (details.payload != null && details.payload!.startsWith('undo_')) {
+              final videoId = details.payload!.replaceFirst('undo_', '');
+              removeDownload(videoId);
+            }
+          },
+        );
+      }
+    } catch (e) {
+      debugPrint('Notification init skipped or failed: $e');
+    }
     _initialized = true;
     await load();
   }
@@ -156,15 +163,17 @@ class DownloadService {
   static Future<void> startDownload(Video video) async {
     if (isDownloading(video.id) || isDownloaded(video.id)) return;
 
-    if (Platform.isAndroid) {
-      final status = await Permission.storage.request();
-      if (!status.isGranted) {
-        final status13 = await Permission.videos.request();
-        if (!status13.isGranted) {
-          debugPrint('Storage permission denied');
-          return;
+    if (!kIsWeb && Platform.isAndroid) {
+      try {
+        await Permission.notification.request();
+      } catch (_) {}
+
+      try {
+        final vStatus = await Permission.videos.request();
+        if (!vStatus.isGranted) {
+          await Permission.storage.request();
         }
-      }
+      } catch (_) {}
     }
 
     final item = DownloadItem(video: video);
@@ -183,21 +192,57 @@ class DownloadService {
 
       item.totalBytes = streamInfo.size.totalBytes;
 
-      String dir;
-      if (Platform.isAndroid) {
-        dir = '/storage/emulated/0/Download/Youtify';
-        final directory = Directory(dir);
-        if (!await directory.exists()) {
-          await directory.create(recursive: true);
+      String dir = '';
+      if (!kIsWeb && Platform.isAndroid) {
+        // Dedicated separate folder for all downloaded videos in system Download directory
+        final primaryDir = Directory('/storage/emulated/0/Download/Youtify');
+        bool canWritePrimary = false;
+        try {
+          if (!await primaryDir.exists()) {
+            await primaryDir.create(recursive: true);
+          }
+          final testFile = File('${primaryDir.path}/.test_probe');
+          await testFile.writeAsString('ok');
+          await testFile.delete();
+          canWritePrimary = true;
+          dir = primaryDir.path;
+        } catch (e) {
+          debugPrint('Primary Download/Youtify folder write failed: $e');
+        }
+
+        if (!canWritePrimary) {
+          final extDir = await getExternalStorageDirectory();
+          if (extDir != null) {
+            final fallbackDir = Directory('${extDir.path}/Youtify');
+            if (!await fallbackDir.exists()) {
+              await fallbackDir.create(recursive: true);
+            }
+            dir = fallbackDir.path;
+          } else {
+            final appDocDir = await getApplicationDocumentsDirectory();
+            final fallbackDir = Directory('${appDocDir.path}/Youtify');
+            if (!await fallbackDir.exists()) {
+              await fallbackDir.create(recursive: true);
+            }
+            dir = fallbackDir.path;
+          }
         }
       } else {
         final directory = await getApplicationDocumentsDirectory();
         dir = '${directory.path}/Youtify';
-        await Directory(dir).create(recursive: true);
+        final directoryObj = Directory(dir);
+        if (!await directoryObj.exists()) {
+          await directoryObj.create(recursive: true);
+        }
       }
 
-      final safeTitle = video.title.replaceAll(RegExp(r'[^\w\s]+'), '').replaceAll(' ', '_');
-      final savePath = '$dir/$safeTitle.mp4';
+      String cleanTitle = video.title.replaceAll(RegExp(r'[\\/:*?"<>|]'), '').trim();
+      if (cleanTitle.isEmpty) {
+        cleanTitle = 'video_${video.id}';
+      } else if (cleanTitle.length > 60) {
+        cleanTitle = cleanTitle.substring(0, 60);
+      }
+      final savePath = '$dir/$cleanTitle.mp4';
       item.savePath = savePath;
 
       DateTime lastUpdate = DateTime.now();
@@ -254,10 +299,10 @@ class DownloadService {
     );
     const details = NotificationDetails(android: androidDetails);
     await _notificationsPlugin.show(
-      videoId.hashCode,
-      'Download Complete',
-      title,
-      details,
+      id: videoId.hashCode,
+      title: 'Download Complete',
+      body: title,
+      notificationDetails: details,
       payload: 'undo_$videoId',
     );
   }

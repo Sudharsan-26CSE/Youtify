@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/video.dart';
 import '../widgets/video_card.dart';
+import '../widgets/skeleton_loader.dart';
 import '../services/youtube_service.dart';
 
 class SearchScreen extends StatefulWidget {
@@ -233,7 +234,10 @@ class _SearchScreenState extends State<SearchScreen> {
       ),
       body: _hasSearched
           ? _isLoading
-              ? const Center(child: CircularProgressIndicator(color: Colors.red))
+              ? ListView.builder(
+                  itemCount: 4,
+                  itemBuilder: (context, index) => const VideoCardSkeleton(),
+                )
               : _searchResults.isEmpty
                   ? Center(
                       child: Text(
@@ -247,8 +251,8 @@ class _SearchScreenState extends State<SearchScreen> {
                       itemBuilder: (context, index) {
                         if (index == _searchResults.length) {
                           return const Padding(
-                            padding: EdgeInsets.all(32.0),
-                            child: Center(child: CircularProgressIndicator(color: Colors.red)),
+                            padding: EdgeInsets.only(bottom: 24),
+                            child: CompactVideoSkeleton(),
                           );
                         }
                         return GestureDetector(

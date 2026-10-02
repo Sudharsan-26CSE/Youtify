@@ -1,8 +1,10 @@
 import 'dart:math';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../services/download_service.dart';
 import '../services/youtube_service.dart';
 import '../widgets/capsule_modal.dart';
+import 'offline_player_screen.dart';
 
 class DownloadsScreen extends StatefulWidget {
   const DownloadsScreen({super.key});
@@ -17,6 +19,8 @@ class _DownloadsScreenState extends State<DownloadsScreen>
   late Animation<double> _fade;
   late Animation<Offset> _slide;
   final Set<String> _selectedIds = {};
+  String _searchQuery = '';
+  final TextEditingController _searchCtrl = TextEditingController();
 
   @override
   void initState() {
@@ -94,23 +98,36 @@ class _DownloadsScreenState extends State<DownloadsScreen>
   void dispose() {
     DownloadService.removeListener(_onUpdate);
     _entryCtrl.dispose();
+    _searchCtrl.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final downloads = DownloadService.downloads;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final bg = isDark ? const Color(0xFF0F0F0F) : Theme.of(context).scaffoldBackgroundColor;
+    final allDownloads = DownloadService.downloads;
+    final downloads = _searchQuery.trim().isEmpty
+        ? allDownloads
+        : allDownloads.where((d) {
+            final query = _searchQuery.toLowerCase();
+            return d.video.title.toLowerCase().contains(query) ||
+                d.video.channelName.toLowerCase().contains(query);
+          }).toList();
+
     return Scaffold(
-      backgroundColor: const Color(0xFF0F0F0F),
+      backgroundColor: bg,
       appBar: AppBar(
-        backgroundColor: const Color(0xFF0F0F0F),
+        backgroundColor: bg,
         elevation: 0,
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back, color: Colors.white),
+          icon: Icon(Icons.arrow_back, color: isDark ? Colors.white : Colors.black87),
           onPressed: () => Navigator.pop(context),
         ),
-        title: const Text('Downloads',
-            style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+        title: Text('Downloads',
+            style: TextStyle(
+                color: isDark ? Colors.white : Colors.black87,
+                fontWeight: FontWeight.bold)),
         actions: [
           if (downloads.isNotEmpty)
             IconButton(
@@ -130,37 +147,93 @@ class _DownloadsScreenState extends State<DownloadsScreen>
             opacity: _fade,
             child: SlideTransition(
               position: _slide,
-              child: downloads.isEmpty
+              child: allDownloads.isEmpty
                   ? _buildEmpty()
                   : Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Padding(
-                          padding: EdgeInsets.fromLTRB(16, 16, 16, 4),
-                          child: Text('Recent Downloads',
-                              style: TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 18,
-                                  fontWeight: FontWeight.bold)),
+                        // Search bar
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+                          child: Container(
+                            height: 44,
+                            decoration: BoxDecoration(
+                              color: isDark ? const Color(0xFF1F1F1F) : const Color(0xFFEDEDED),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: TextField(
+                              controller: _searchCtrl,
+                              style: TextStyle(color: isDark ? Colors.white : Colors.black87, fontSize: 14),
+                              onChanged: (val) => setState(() => _searchQuery = val),
+                              decoration: InputDecoration(
+                                hintText: 'Search downloaded videos...',
+                                hintStyle: TextStyle(color: Colors.grey[500], fontSize: 13),
+                                prefixIcon: Icon(Icons.search, color: Colors.grey[500], size: 20),
+                                suffixIcon: _searchQuery.isNotEmpty
+                                    ? IconButton(
+                                        icon: const Icon(Icons.clear, size: 18),
+                                        onPressed: () {
+                                          _searchCtrl.clear();
+                                          setState(() => _searchQuery = '');
+                                        },
+                                      )
+                                    : null,
+                                border: InputBorder.none,
+                                contentPadding: const EdgeInsets.symmetric(vertical: 10),
+                              ),
+                            ),
+                          ),
+                        ),
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Text('Downloaded Videos (${downloads.length})',
+                                  style: TextStyle(
+                                      color: isDark ? Colors.white : Colors.black87,
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.bold)),
+                              if (allDownloads.isNotEmpty)
+                                Text(
+                                  'Tap to play offline',
+                                  style: TextStyle(color: Colors.grey[500], fontSize: 11),
+                                ),
+                            ],
+                          ),
                         ),
                         Expanded(
-                          child: ListView.builder(
-                            padding: const EdgeInsets.only(bottom: 120),
-                            itemCount: downloads.length,
-                            itemBuilder: (context, i) {
-                              final item = downloads[i];
-                              return _DownloadTile(
-                                item: item,
-                                animIndex: i,
-                                selected: _selectedIds.contains(item.video.id),
-                                onLongPress: () => _toggleSelection(item.video.id),
-                                onTap: _selectedIds.isEmpty
-                                    ? null
-                                    : () => _toggleSelection(item.video.id),
-                                onDelete: () => _deleteSelected(),
-                              );
-                            },
-                          ),
+                          child: downloads.isEmpty
+                              ? Center(
+                                  child: Text('No videos match "$_searchQuery"',
+                                      style: TextStyle(color: Colors.grey[500])),
+                                )
+                              : ListView.builder(
+                                  padding: const EdgeInsets.only(bottom: 120),
+                                  itemCount: downloads.length,
+                                  itemBuilder: (context, i) {
+                                    final item = downloads[i];
+                                    return _DownloadTile(
+                                      item: item,
+                                      animIndex: i,
+                                      selected: _selectedIds.contains(item.video.id),
+                                      onLongPress: () => _toggleSelection(item.video.id),
+                                      onTap: () {
+                                        if (_selectedIds.isNotEmpty) {
+                                          _toggleSelection(item.video.id);
+                                        } else if (item.isComplete) {
+                                          Navigator.push(
+                                            context,
+                                            MaterialPageRoute(
+                                              builder: (_) => OfflinePlayerScreen(item: item),
+                                            ),
+                                          );
+                                        }
+                                      },
+                                      onDelete: () => _deleteSelected(),
+                                    );
+                                  },
+                                ),
                         ),
                       ],
                     ),
@@ -307,7 +380,9 @@ class _DownloadTileState extends State<_DownloadTile>
             child: Container(
             margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
             decoration: BoxDecoration(
-              color: const Color(0xFF1A1A1A),
+              color: Theme.of(context).brightness == Brightness.dark
+                  ? const Color(0xFF1A1A1A)
+                  : const Color(0xFFF2F2F2),
               borderRadius: BorderRadius.circular(14),
               border: widget.selected
                   ? Border.all(color: Colors.redAccent, width: 2)
@@ -340,8 +415,10 @@ class _DownloadTileState extends State<_DownloadTile>
                               item.video.title,
                               maxLines: 2,
                               overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                  color: Colors.white,
+                              style: TextStyle(
+                                  color: Theme.of(context).brightness == Brightness.dark
+                                      ? Colors.white
+                                      : Colors.black87,
                                   fontSize: 13,
                                   fontWeight: FontWeight.w500),
                             ),
@@ -397,17 +474,77 @@ class _DownloadTileState extends State<_DownloadTile>
                           ),
                       ],
                     ),
-                  ] else
+                  ] else ...[
                     Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        const Icon(Icons.check_circle,
-                            color: Colors.green, size: 14),
-                        const SizedBox(width: 4),
-                        Text('Downloaded • ${item.formattedTotalSize}',
-                            style: TextStyle(
-                                color: Colors.grey[400], fontSize: 11)),
+                        Row(
+                          children: [
+                            const Icon(Icons.check_circle,
+                                color: Colors.green, size: 14),
+                            const SizedBox(width: 4),
+                            Text('Downloaded • ${item.formattedTotalSize}',
+                                style: TextStyle(
+                                    color: Colors.grey[500], fontSize: 11)),
+                          ],
+                        ),
+                        Row(
+                          children: const [
+                            Icon(Icons.play_circle_fill, color: Colors.red, size: 18),
+                            SizedBox(width: 4),
+                            Text('Play', style: TextStyle(color: Colors.red, fontSize: 11, fontWeight: FontWeight.bold)),
+                          ],
+                        ),
                       ],
                     ),
+                    const SizedBox(height: 6),
+                    // File path container
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: Theme.of(context).brightness == Brightness.dark
+                            ? const Color(0xFF252525)
+                            : const Color(0xFFE5E5E5),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.folder_open, size: 14, color: Colors.amber),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: Text(
+                              item.savePath ?? 'Path unavailable',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                color: Theme.of(context).brightness == Brightness.dark
+                                    ? Colors.white70
+                                    : Colors.black87,
+                                fontSize: 10,
+                                fontFamily: 'monospace',
+                              ),
+                            ),
+                          ),
+                          GestureDetector(
+                            onTap: () {
+                              Clipboard.setData(ClipboardData(text: item.savePath ?? ''));
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                  content: Text('File location copied!'),
+                                  duration: Duration(seconds: 1),
+                                  behavior: SnackBarBehavior.floating,
+                                ),
+                              );
+                            },
+                            child: const Padding(
+                              padding: EdgeInsets.only(left: 4),
+                              child: Icon(Icons.copy, size: 12, color: Colors.grey),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),
