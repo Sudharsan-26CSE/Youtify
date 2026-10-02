@@ -196,10 +196,8 @@ class _VideoCardState extends State<VideoCard>
             duration: const Duration(milliseconds: 120),
             child: Column(
               children: [
-                // Thumbnail — unique Hero tag using video id + widget key hashCode
-                Hero(
-                  tag: 'video_thumb_${widget.video.id}_${widget.key.hashCode}',
-                  child: Stack(
+                // Thumbnail
+                Stack(
                     children: [
                       Container(
                         height: 220,
@@ -276,7 +274,6 @@ class _VideoCardState extends State<VideoCard>
                           ),
                         ),
                     ],
-                  ),
                 ),
 
                 // Details
